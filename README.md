@@ -6,7 +6,8 @@ App web para armar, editar, publicar y exportar los turnos mensuales de la estac
 
 1. Doble clic en `run.bat` (la primera vez instala todo).
 2. Empleados: <http://localhost:5000> · Encargado: <http://localhost:5000/admin>
-3. Usuario inicial: `maycol` / contraseña `tifena` (la pide cambiar al entrar).
+3. Usuario del encargado: `maycol`. En una instalación nueva, la contraseña inicial se toma de la
+   variable de entorno `TURNOS_ADMIN_PASSWORD` al crear la base (si no está definida es `tifena` y la pide cambiar).
 
 Desde el celular en el mismo wifi: `http://IP-DE-LA-PC:5000`.
 

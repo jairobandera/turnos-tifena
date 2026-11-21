@@ -3,6 +3,7 @@
 Uso:  python backend/seed.py            (solo si la base está vacía)
       python backend/seed.py --sin-ejemplo
 """
+import os
 import sys
 from datetime import date, timedelta
 
@@ -76,7 +77,7 @@ def seed(conn, with_example=True):
         ids[name] = db.save_employee(conn, {"name": name, "active": True, "positions": pos})
     conn.execute(
         "INSERT INTO users(username, password_hash, must_change, employee_id) VALUES (?, ?, 1, ?)",
-        ("maycol", generate_password_hash("tifena"), ids["Maycol"]),
+        ("maycol", generate_password_hash(os.environ.get("TURNOS_ADMIN_PASSWORD", "tifena")), ids["Maycol"]),
     )
     db.save_settings(conn, db.DEFAULT_SETTINGS)
     if with_example:

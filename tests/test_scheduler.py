@@ -1,4 +1,4 @@
-"""Genera diciembre 2026 a partir de las planillas reales (16-29/11) y verifica las reglas."""
+﻿"""Genera diciembre 2026 a partir de las planillas reales (16-29/11) y verifica las reglas."""
 from datetime import timedelta
 
 import pytest
@@ -11,7 +11,7 @@ from conftest import emp_id
 
 @pytest.fixture
 def diciembre(conn):
-    luis, maycol = emp_id(conn, "Luis"), emp_id(conn, "Maycol")
+    luis, maycol = emp_id(conn, "Elias"), emp_id(conn, "Maycol")  # "luis" = empleado con vacaciones de prueba
     conn.execute("INSERT INTO licenses(employee_id, start, end, kind) VALUES (?, '2026-12-10', '2026-12-19', 'Vacaciones')", (luis,))
     conn.commit()
     # el encargado se asigna "corte de pasto" el 05/12 a la mañana
