@@ -25,7 +25,29 @@ def libres_target(objetivo, dias_disponibles, dias_mes):
     return int(objetivo * dias_disponibles / dias_mes + 0.5)
 
 
-def suggest(year, month, assignments, employees, settings, today, only_encargado=None):
+def license_conflicts(year, month, assignments, employees, licenses, today):
+    """Gente con turnos asignados durante su licencia (de hoy en adelante): hay que reacomodar."""
+    first, last = month_bounds(year, month)
+    start = iso(max(first, parse_date(today)))
+    lic = license_days(licenses)
+    emp_by_id = {e["id"]: e for e in employees}
+    hits = defaultdict(list)
+    for a in assignments:
+        if start <= a["date"] <= iso(last) and a["date"] in lic.get(a["employee_id"], ()):
+            hits[a["employee_id"]].append(a)
+    out = []
+    for eid, lst in hits.items():
+        lst.sort(key=lambda a: (a["date"], ["T3", "T1", "T2"].index(a["shift"])))
+        dates = sorted({a["date"] for a in lst})
+        name = emp_by_id.get(eid, {}).get("name", f"#{eid}")
+        out.append({"kind": "licencia", "date": dates[0], "shift": lst[0]["shift"], "employee_id": eid, "name": name,
+                    "from_position": lst[0]["position"], "to_position": None, "score": 5, "covers": [],
+                    "dates": dates,
+                    "reasons": [f"está de licencia y tiene {len(lst)} turno(s) asignado(s) entre el {fmt_day(dates[0])} y el {fmt_day(dates[-1])}"]})
+    return out
+
+
+def suggest(year, month, assignments, employees, settings, today, only_encargado=None, licenses=()):
     """Sugiere días (de hoy en adelante) en que conviene pasar a alguien a su puesto "ocasional"
     (ej. Soledad del spot a Auxiliar/limpieza) y quién podría cubrir su lugar.
 
@@ -39,8 +61,9 @@ def suggest(year, month, assignments, employees, settings, today, only_encargado
     occasional = [(e, p) for e in employees if e["active"] for p, lvl in e["positions"].items() if lvl == "ocasional"]
     encargados = [e for e in employees if e["active"] and "otro" in e["positions"]
                   and (only_encargado is None or e["id"] == only_encargado)]
+    lic_out = license_conflicts(year, month, assignments, employees, licenses, today) if licenses else []
     if not occasional and not encargados:
-        return []
+        return lic_out
     by_day = defaultdict(list)
     for a in assignments:
         by_day[a["date"]].append(a)
@@ -112,8 +135,10 @@ def suggest(year, month, assignments, employees, settings, today, only_encargado
                             "to_position": "otro", "note": "Corte de pasto", "score": 2, "covers": sorted(set(covers)),
                             "reasons": [reason]})
                 break
-    out.sort(key=lambda x: (x["date"], x["to_position"]))
-    return out
+    for x in out:
+        x.setdefault("kind", "puesto")
+    out.sort(key=lambda x: (x["date"], x["to_position"] or ""))
+    return lic_out + out
 
 
 def shift_interval(d, shift, cl=()):

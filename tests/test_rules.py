@@ -130,3 +130,15 @@ def test_layout_dia_cerrado_y_noche_larga(conn):
     assert lay["title"].endswith("ESTACIÓN CERRADA") and lay["T1"] == [("CERRADO", "")]
     lay = rules.day_layout("2026-12-26", [a("2026-12-26", "T3", "cajero", emp_id(conn, "Jairo"))], emps, {}, st, cl)
     assert lay["heads"]["T3"] == "TURNO 3 (Noche) 20:00 a 06:00"
+
+
+def test_sugiere_reacomodar_por_licencia(conn):
+    emps, st = db.get_employees(conn), db.get_settings(conn)
+    camilo = emp_id(conn, "Camilo")
+    assigns = [a("2026-12-09", "T1", "pistero", camilo), a("2026-12-11", "T2", "pistero", camilo),
+               a("2026-12-12", "T2", "pistero", camilo)]
+    lic = [{"employee_id": camilo, "start": "2026-12-10", "end": "2026-12-20"}]
+    s = [x for x in rules.suggest(2026, 12, assigns, emps, st, db.parse_date("2026-12-01"), licenses=lic) if x["kind"] == "licencia"]
+    assert len(s) == 1 and s[0]["employee_id"] == camilo and s[0]["date"] == "2026-12-11" and s[0]["dates"] == ["2026-12-11", "2026-12-12"]
+    # lo que ya pasó no se puede reacomodar
+    assert not [x for x in rules.suggest(2026, 12, assigns, emps, st, db.parse_date("2026-12-13"), licenses=lic) if x["kind"] == "licencia"]

@@ -1,4 +1,4 @@
-# Turnos Tifena
+﻿# Turnos Tifena
 
 App web para armar, editar, publicar y exportar los turnos mensuales de la estación.
 
@@ -32,7 +32,7 @@ Desde el celular en el mismo wifi: `http://IP-DE-LA-PC:5000`.
 - **Exportar** semana o mes a PDF/Excel con el formato de la planilla (Turno 3, Turno 1, Turno 2, Libres)
   y compartir por WhatsApp (en el celular abre WhatsApp con el archivo adjunto).
 - **Reporte** (sólo encargado, no se exporta): libres y horas de 4 por semana y por mes.
-- **Licencias**: alta, edición e historial. Los días de licencia no cuentan como libres y el tope de libres se prorratea.
+- **Licencias**: alta, edición e historial. Si al guardar una licencia esa persona ya tenía turnos armados en esos días, la app ofrece **Simular** el reacomodo (y queda como sugerencia 💡). Los días de licencia no cuentan como libres y el tope de libres se prorratea.
 
 ## Reglas
 

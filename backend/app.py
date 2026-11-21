@@ -83,11 +83,11 @@ def month_closures(c, year, month):
 
 
 def analysis(c, year, month, assignments):
-    emps, settings = db.get_employees(c), db.get_settings(c)
-    res = rules.analyze(year, month, assignments, emps, db.get_licenses(c), settings, month_closures(c, year, month))
+    emps, settings, lics = db.get_employees(c), db.get_settings(c), db.get_licenses(c)
+    res = rules.analyze(year, month, assignments, emps, lics, settings, month_closures(c, year, month))
     # "otras tareas" sólo se sugieren al encargado logueado, para sí mismo
     res["suggestions"] = rules.suggest(year, month, assignments, emps, settings, date.today(),
-                                       only_encargado=my_employee_id(c) or -1)
+                                       only_encargado=my_employee_id(c) or -1, licenses=lics)
     return res
 
 

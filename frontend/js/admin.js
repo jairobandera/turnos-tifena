@@ -481,6 +481,9 @@ async function togglePublish() {
 // ============ sugerencias, simulación y reacomodo ============
 
 function suggestionText(x) {
+  if (x.kind === "licencia") {
+    return `Reacomodar por la licencia de <b>${UI.esc(x.name.toUpperCase())}</b> desde el ${D.dm(D.parse(x.date))}`;
+  }
   let to;
   if (x.to_position === "auxiliar") to = "Auxiliar (limpieza)";
   else if (x.to_position === TASK) to = `otras tareas (${UI.esc(x.note || "")})`;
@@ -505,6 +508,9 @@ function showSuggestions() {
 }
 
 function applySuggestion(x) {
+  if (x.kind === "licencia") {
+    return simulateRegen(x.date, `${x.name} está de licencia: se lo saca de sus turnos desde el ${D.dm(D.parse(x.date))}`);
+  }
   const a = A.assignments.find((y) => y.date === x.date && y.shift === x.shift && y.employee_id === x.employee_id);
   if (!a) return UI.toast("Ese turno cambió; volvé a mirar las sugerencias.", 4000);
   const to = x.to_position === "auxiliar" ? "limpieza" : x.to_position === TASK ? (x.note || "otras tareas").toLowerCase() : POS_NAME[x.to_position];
@@ -532,6 +538,72 @@ async function simulate(a, toPosition, label, note) {
   }
   stop();
   showPreview(a.date, r, label);
+}
+
+/** Si el mes siguiente ya está armado y alguien quedó con turnos durante su licencia, avisa. */
+async function checkNextMonthLicenses() {
+  const d = new Date(A.year, A.month, 1);
+  try {
+    const r = await API.get(`/api/admin/month?year=${d.getFullYear()}&month=${d.getMonth() + 1}`);
+    const lic = (r.analysis.suggestions || []).filter((x) => x.kind === "licencia");
+    if (lic.length) {
+      UI.toast(`Ojo: en ${D.MONTHS[d.getMonth()]} ${lic.map((x) => x.name).join(", ")} sigue con turnos durante la licencia. Pasá a ese mes: está la sugerencia 💡.`, 7000);
+    }
+  } catch (_) { /* mes sin datos */ }
+}
+
+/** Simula rehacer desde una fecha (ej. por una licencia nueva) y muestra la vista previa. */
+async function simulateRegen(desde, label) {
+  const stop = UI.busy(`Simulando desde el ${D.dm(D.parse(desde))}… (puede tardar hasta ${A.settings.tiempo_generador || 25} segundos)`);
+  let r;
+  try {
+    const clean = A.assignments.map(({ _i, ...x }) => x);
+    r = await API.post("/api/admin/generate", { year: A.year, month: A.month, desde, mode: "rehacer", assignments: clean });
+  } catch (err) {
+    stop();
+    return UI.toast("No se pudo simular: " + err.message, 5000);
+  }
+  stop();
+  showPreview(desde, r, label);
+}
+
+/** Después de guardar una licencia: si choca con turnos ya armados, ofrece reacomodar (con simulación). */
+async function offerLicenseReflow(lic) {
+  const today = D.today();
+  const from = lic.start > today ? lic.start : today;
+  if (lic.end < from) return;   // licencia ya pasada: no hay nada que reacomodar
+  const name = A.emps.get(Number(lic.employee_id))?.name || "";
+  // meses que toca la licencia (de hoy en adelante)
+  const months = [];
+  for (let d = D.parse(from.slice(0, 8) + "01"); D.iso(d) <= lic.end; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) {
+    months.push([d.getFullYear(), d.getMonth() + 1]);
+  }
+  for (const [y, m] of months) {
+    const isCurrent = y === A.year && m === A.month;
+    let an;
+    if (isCurrent) {
+      an = await API.post("/api/admin/analyze", { year: y, month: m, assignments: A.assignments.map(({ _i, ...x }) => x) });
+    } else {
+      an = (await API.get(`/api/admin/month?year=${y}&month=${m}`)).analysis;
+    }
+    const hit = (an.suggestions || []).find((x) => x.kind === "licencia" && x.employee_id === Number(lic.employee_id));
+    if (!hit) continue;
+    const ok = await UI.confirm("Reacomodar por la licencia",
+      `<b>${UI.esc(name)}</b> ${UI.esc(hit.reasons[0])} (${D.MONTHS[m - 1]}).<br>¿Querés simular cómo quedarían los turnos sin ${UI.esc(name)}? Vas a poder ver el resultado antes de aceptar.`,
+      "🔎 Simular");
+    if (!ok) {
+      UI.toast("Queda como sugerencia 💡 en la pestaña Turnos", 4000);
+      return;
+    }
+    if (!isCurrent) {
+      if (A.dirty && !(await UI.confirm("Cambios sin guardar", `Para simular hay que abrir ${D.MONTHS[m - 1]}. Los cambios sin guardar de este mes se pierden.`, "Seguir", true))) return;
+      A.year = y;
+      A.month = m;
+      await loadMonth();
+    }
+    $$("#tabs button").find((b) => b.dataset.tab === "turnos").click();
+    return simulateRegen(hit.date, `${name} está de licencia: se lo saca de sus turnos desde el ${D.dm(D.parse(hit.date))}`);
+  }
 }
 
 function metrics(an) {
@@ -589,6 +661,7 @@ function showPreview(fromDate, r, label) {
     if (wi >= 0) A.week = wi;
     if (await saveMonth()) {
       A.lastGen = { msgDone: `${UI.esc(label)}. Se reacomodó del ${D.dm(D.parse(fromDate))} al ${D.dm(last)} y quedó guardado.`, faltantes: r.faltantes || [], estricto: r.estricto };
+      checkNextMonthLicenses();
       renderTurnos(true);
     }
   };
@@ -810,6 +883,7 @@ function bindLicenses() {
       UI.toast("Licencia guardada");
       reset();
       await refreshLicenses();
+      await offerLicenseReflow(body);
     } catch (err) {
       UI.toast(err.message, 4000);
     }
