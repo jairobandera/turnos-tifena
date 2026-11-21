@@ -26,7 +26,7 @@ def diciembre(conn):
     r = scheduler.generate(2026, 12, emps, db.get_assignments(conn, f - timedelta(days=20), l), lic, settings)
     assert r["ok"]
     full = db.get_assignments(conn, f - timedelta(days=20), f - timedelta(days=1)) + r["assignments"]
-    return {"r": r, "analysis": rules.analyze(2026, 12, full, emps, lic, settings), "luis": luis, "maycol": maycol,
+    return {"r": r, "analysis": rules.analyze(2026, 12, full, emps, lic, settings), "luis": luis, "maycol": maycol, "conn": conn,
             "settings": settings}
 
 
@@ -76,3 +76,21 @@ def test_rehacer_final_de_mes_respeta_tope_de_libres(conn):
     full = db.get_assignments(conn, f - timedelta(days=20), f - timedelta(days=1)) + r2["assignments"]
     rep = rules.analyze(2026, 12, full, emps, lic, settings)["report"]
     assert all(row["libres"] <= row["libres_objetivo"] for row in rep), [(x["name"], x["libres"]) for x in rep]
+
+
+def test_generador_no_pone_ocasionales_solo(diciembre):
+    sol = [e["id"] for e in db.get_employees(diciembre["conn"]) if e["name"] == "Soledad"][0]
+    assert not [a for a in diciembre["r"]["assignments"] if a["employee_id"] == sol and a["position"] == "auxiliar"]
+
+
+def test_generador_respeta_cierres(conn):
+    emps, settings, lic = db.get_employees(conn), db.get_settings(conn), db.get_licenses(conn)
+    f, l = db.month_bounds(2026, 12)
+    cl = rules.expand_closures(db.get_closures(conn), f - timedelta(days=20), l + timedelta(days=1))
+    r = scheduler.generate(2026, 12, emps, db.get_assignments(conn, f - timedelta(days=20), l), lic, settings, closures=cl)
+    assert r["ok"] and r["faltantes"] == []
+    assert not [x for x in r["assignments"] if x["date"] == "2026-12-25"]
+    assert {x["shift"] for x in r["assignments"] if x["date"] == "2026-12-26"} == {"T1", "T2", "T3"}
+    full = db.get_assignments(conn, f - timedelta(days=20), f - timedelta(days=1)) + r["assignments"]
+    rep = rules.analyze(2026, 12, full, emps, lic, settings, cl)["report"]
+    assert all(x["libres"] <= x["libres_objetivo"] for x in rep)

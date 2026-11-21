@@ -62,3 +62,22 @@ def test_exportar_excel_y_pdf(client):
     assert ws["A2"].value == "TURNO 3 (Noche)" and ws["C2"].value == "TURNO 1 (Mañana)" and ws["E2"].value == "TURNO 2 (Tarde)" and ws["G2"].value == "LIBRES"
     r = client.get("/api/admin/export/pdf?start=2026-11-01&end=2026-11-30")
     assert r.status_code == 200 and r.data[:4] == b"%PDF"
+
+
+def test_reflow_pasa_a_limpieza_y_no_toca_dias_anteriores(client):
+    login(client)
+    client.put("/api/admin/settings", json={"tiempo_generador": 15})
+    r = client.post("/api/admin/generate", json={"year": 2026, "month": 12, "mode": "completar"}).get_json()
+    month = r["assignments"]
+    sol = emp_id(client.db, "Soledad")
+    target = next(a for a in month if a["employee_id"] == sol and a["position"] == "shop" and a["date"] >= "2026-12-10")
+    r2 = client.post("/api/admin/reflow", json={"year": 2026, "month": 12, "date": target["date"], "shift": target["shift"],
+                                                "employee_id": sol, "to_position": "auxiliar", "assignments": month})
+    assert r2.status_code == 200
+    out = r2.get_json()
+    mine = [a for a in out["assignments"] if a["date"] == target["date"] and a["employee_id"] == sol]
+    assert mine and mine[0]["position"] == "auxiliar" and mine[0]["locked"]
+    key = lambda a: (a["date"], a["shift"], a["position"], a["employee_id"])
+    assert sorted(key(a) for a in month if a["date"] < target["date"]) == sorted(key(a) for a in out["assignments"] if a["date"] < target["date"])
+    assert out["faltantes"] == []
+    assert "suggestions" in out["analysis"]

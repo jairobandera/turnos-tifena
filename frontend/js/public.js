@@ -51,15 +51,16 @@ async function load() {
     content.innerHTML = `<div class="card empty">📭 Los turnos de este período todavía no se publicaron.</div>`;
     return;
   }
-  const unpublished = new Set(dates.filter((d) => !published.has(d) || !byDay.has(d)));
+  S.special = data.special || {};
+  const unpublished = new Set(dates.filter((d) => !published.has(d) || (!byDay.has(d) && !dayIsClosed(S.special, d))));
   const whoId = S.who ? Number(S.who) : null;
 
   if (S.view === "mine" && whoId && S.emps.has(whoId)) {
     content.innerHTML = `<h3>${UI.esc(S.emps.get(whoId).name)}</h3>` +
-      renderMyDays(dates, byDay, whoId, { licDays: S.licDays, unpublished });
+      renderMyDays(dates, byDay, whoId, { licDays: S.licDays, unpublished, special: S.special });
     return;
   }
-  const ctx = { emps: S.emps, staffing: S.staffing, licDays: S.licDays, editable: false, highlight: whoId };
+  const ctx = { emps: S.emps, staffing: S.staffing, licDays: S.licDays, editable: false, highlight: whoId, special: S.special };
   content.innerHTML = dates
     .filter((d) => !(S.mode === "month" && unpublished.has(d)))
     .map((d) => renderDay(d, byDay.get(d) || [], { ...ctx, unpublished: unpublished.has(d) }))

@@ -25,10 +25,198 @@ def libres_target(objetivo, dias_disponibles, dias_mes):
     return int(objetivo * dias_disponibles / dias_mes + 0.5)
 
 
-def shift_interval(d, shift):
-    """(inicio, fin) en horas absolutas desde una época arbitraria."""
+def suggest(year, month, assignments, employees, settings, today, only_encargado=None):
+    """Sugiere días (de hoy en adelante) en que conviene pasar a alguien a su puesto "ocasional"
+    (ej. Soledad del spot a Auxiliar/limpieza) y quién podría cubrir su lugar.
+
+    Prioridad 3: falta gente en el puesto ocasional en su mismo turno.
+    Prioridad 2: hay un refuerzo en su mismo turno que sabe hacer su puesto (cambio sin dejar huecos).
+    """
+    first, last = month_bounds(year, month)
+    start = max(first, parse_date(today))
+    staffing = settings["staffing"]
+    emp_by_id = {e["id"]: e for e in employees}
+    occasional = [(e, p) for e in employees if e["active"] for p, lvl in e["positions"].items() if lvl == "ocasional"]
+    encargados = [e for e in employees if e["active"] and "otro" in e["positions"]
+                  and (only_encargado is None or e["id"] == only_encargado)]
+    if not occasional and not encargados:
+        return []
+    by_day = defaultdict(list)
+    for a in assignments:
+        by_day[a["date"]].append(a)
+    out = []
+    for d in date_range(start, last):
+        ds = iso(d)
+        day = by_day.get(ds, [])
+        if not day:
+            continue
+        count = defaultdict(int)
+        for a in day:
+            count[(a["shift"], a["position"])] += 1
+        for e, p_to in occasional:
+            best = None
+            for a in day:
+                if a["employee_id"] != e["id"] or a["position"] in (p_to, "otro") or a.get("locked"):
+                    continue
+                s, p_from = a["shift"], a["position"]
+                need_to = staffing.get(s, {}).get(p_to, 0)
+                if not need_to:
+                    continue
+                score, reasons = 0, []
+                if count[(s, p_to)] < need_to:
+                    score += 3
+                    reasons.append(f"falta {POS_NAME[p_to]} a la {SHIFT_NAME[s].lower()}")
+                covers = []
+                for b in day:
+                    other = emp_by_id.get(b["employee_id"])
+                    if b["shift"] != s or b["employee_id"] == e["id"] or not other or b["position"] == "otro":
+                        continue
+                    is_extra = count[(s, b["position"])] > staffing.get(s, {}).get(b["position"], 0)
+                    if is_extra and other["positions"].get(p_from) in ("principal", "suplente"):
+                        covers.append(other["name"])
+                if covers:
+                    score += 2
+                    who = sorted(set(covers))
+                    if len(who) == 1:
+                        reasons.append(f"{who[0]} está de refuerzo y puede cubrir {POS_NAME[p_from]}")
+                    else:
+                        reasons.append(f"{', '.join(who[:-1])} o {who[-1]} están de refuerzo y pueden cubrir {POS_NAME[p_from]}")
+                if score and (best is None or score > best["score"]):
+                    best = {"date": ds, "shift": s, "employee_id": e["id"], "name": e["name"],
+                            "from_position": p_from, "to_position": p_to, "score": score,
+                            "covers": sorted(set(covers)), "reasons": reasons}
+            if best:
+                out.append(best)
+        # encargado de refuerzo (o con un refuerzo que lo cubre) -> a "otras tareas" (ej. corte de pasto)
+        for e in encargados:
+            if any(a["employee_id"] == e["id"] and a["position"] == "otro" for a in day):
+                continue
+            for a in day:
+                if a["employee_id"] != e["id"] or a.get("locked"):
+                    continue
+                s, p = a["shift"], a["position"]
+                need = staffing.get(s, {}).get(p, 0)
+                covers = [emp_by_id[b["employee_id"]]["name"] for b in day
+                          if b["shift"] == s and b["employee_id"] != e["id"] and b["employee_id"] in emp_by_id
+                          and b["position"] != p and b["position"] != "otro"
+                          and count[(s, b["position"])] > staffing.get(s, {}).get(b["position"], 0)
+                          and emp_by_id[b["employee_id"]]["positions"].get(p) in ("principal", "suplente")]
+                if count[(s, p)] > need:
+                    reason = f"es refuerzo de {POS_NAME[p]}: sale de la lista sin dejar hueco"
+                elif covers:
+                    who = sorted(set(covers))
+                    reason = f"{' o '.join(who)} {'está' if len(who) == 1 else 'están'} de refuerzo y {'puede' if len(who) == 1 else 'pueden'} cubrir {POS_NAME[p]}"
+                else:
+                    continue
+                out.append({"date": ds, "shift": s, "employee_id": e["id"], "name": e["name"], "from_position": p,
+                            "to_position": "otro", "note": "Corte de pasto", "score": 2, "covers": sorted(set(covers)),
+                            "reasons": [reason]})
+                break
+    out.sort(key=lambda x: (x["date"], x["to_position"]))
+    return out
+
+
+def shift_interval(d, shift, cl=()):
+    """(inicio, fin) en horas absolutas. Con cierres usa el horario real; si el turno está cerrado, el normal."""
+    w = shift_window(d, shift, cl) if cl else None
+    if w:
+        return w
     base = parse_date(d).toordinal() * 24 + SHIFT_START[shift]
     return base, base + 8
+
+
+# ---------------- cierres de la estación ----------------
+# Un cierre es {start: 'YYYY-MM-DDTHH:MM', end: ..., note, yearly}. Si un turno queda con menos de
+# MIN_OPEN horas abiertas se considera cerrado y ese rato lo cubre el turno de al lado
+# (ej. reabre 25/12 20:00 -> la noche entra a las 20:00 y hace 10 horas).
+MIN_OPEN = 4
+
+
+def _abs_hour(dt):
+    d, t = dt.split("T")
+    h, mi = t.split(":")[:2]
+    return parse_date(d).toordinal() * 24 + int(h) + int(mi) / 60
+
+
+def expand_closures(closures, start, end):
+    """Cierres (incluidos los que se repiten todos los años) que tocan el rango -> [(inicio, fin, nota)]."""
+    start, end = parse_date(start), parse_date(end)
+    out = []
+    for c in closures:
+        s, e = c["start"], c["end"]
+        try:
+            if c.get("yearly"):
+                gap = int(e[:4]) - int(s[:4])
+                for y in range(start.year - 1, end.year + 2):
+                    out.append((_abs_hour(f"{y}{s[4:]}"), _abs_hour(f"{y + gap}{e[4:]}"), c.get("note", "")))
+            else:
+                out.append((_abs_hour(s), _abs_hour(e), c.get("note", "")))
+        except ValueError:
+            continue  # 29/02 en año no bisiesto, etc.
+    lo, hi = start.toordinal() * 24 - 48, (end.toordinal() + 2) * 24
+    return [x for x in out if x[1] > lo and x[0] < hi and x[1] > x[0]]
+
+
+def _open_part(s, e, cl):
+    parts = [(s, e)]
+    for cs, ce, _ in cl:
+        nxt = []
+        for a, b in parts:
+            if ce <= a or cs >= b:
+                nxt.append((a, b))
+                continue
+            if a < cs:
+                nxt.append((a, cs))
+            if ce < b:
+                nxt.append((ce, b))
+        parts = nxt
+    return max(parts, key=lambda p: p[1] - p[0]) if parts else None
+
+
+def shift_window(d, shift, cl):
+    """Horario real del turno con cierres: (inicio, fin) en horas absolutas, o None si está cerrado."""
+    base = parse_date(d).toordinal() * 24 + SHIFT_START[shift]
+    s, e = base, base + 8
+    if not cl:
+        return s, e
+    part = _open_part(s, e, cl)
+    if not part or part[1] - part[0] < MIN_OPEN:
+        return None
+    o_s, o_e = part
+    prev = _open_part(s - 8, s, cl)
+    if prev and prev[1] == s and prev[1] - prev[0] < MIN_OPEN:
+        o_s = prev[0]
+    nxt = _open_part(e, e + 8, cl)
+    if nxt and nxt[0] == e and nxt[1] - nxt[0] < MIN_OPEN:
+        o_e = nxt[1]
+    return o_s, o_e
+
+
+def fmt_hour(x):
+    h = x % 24
+    hh, mm = int(h), int(round((h - int(h)) * 60))
+    return f"{hh:02d}:{mm:02d}"
+
+
+def special_hours(start, end, cl):
+    """{fecha: {turno: None (cerrado) | "20:00 a 06:00"}} sólo para los turnos que no son normales."""
+    out = {}
+    if not cl:
+        return out
+    for d in date_range(start, end):
+        ds = iso(d)
+        for sh in ("T3", "T1", "T2"):
+            w = shift_window(ds, sh, cl)
+            base = d.toordinal() * 24 + SHIFT_START[sh]
+            if w is None:
+                out.setdefault(ds, {})[sh] = None
+            elif w != (base, base + 8):
+                out.setdefault(ds, {})[sh] = f"{fmt_hour(w[0])} a {fmt_hour(w[1])}"
+    return out
+
+
+def closed_days(special):
+    return {d for d, v in special.items() if len(v) == 3 and all(x is None for x in v.values())}
 
 
 def fmt_day(d):
@@ -47,7 +235,7 @@ def weeks_of_month(year, month):
     return out
 
 
-def employee_timeline(assignments):
+def employee_timeline(assignments, cl=()):
     """{emp_id: [(inicio, fin, date, shift)] ordenado}"""
     tl = defaultdict(list)
     seen = set()
@@ -56,7 +244,7 @@ def employee_timeline(assignments):
         if key in seen:
             continue
         seen.add(key)
-        s, e = shift_interval(a["date"], a["shift"])
+        s, e = shift_interval(a["date"], a["shift"], cl)
         tl[a["employee_id"]].append((s, e, a["date"], a["shift"]))
     for v in tl.values():
         v.sort()
@@ -87,7 +275,7 @@ def shift_blocks(seq):
     return blocks
 
 
-def analyze(year, month, assignments, employees, licenses, settings):
+def analyze(year, month, assignments, employees, licenses, settings, closures=()):
     """Valida el mes y arma el reporte privado del admin.
 
     `assignments` puede incluir días anteriores al mes (historial) para evaluar continuidad.
@@ -104,6 +292,8 @@ def analyze(year, month, assignments, employees, licenses, settings):
     target_libres = int(settings.get("libres_objetivo", 6))
     max_seguidos = int(settings.get("max_dias_seguidos", 6))
 
+    special = special_hours(first, last, closures)
+    closed = closed_days(special)
     issues = []
 
     def issue(level, msg, date=None, shift=None, employee_id=None, position=None):
@@ -117,10 +307,18 @@ def analyze(year, month, assignments, employees, licenses, settings):
     # --- dotación, licencias, puestos, duplicados ---
     for d in month_days:
         day = by_day.get(d, [])
+        if d in closed:
+            if day:
+                issue("warn", "La estación está cerrada ese día", date=d)
+            continue
         if not day:
             issue("info", "Día sin armar", date=d)
             continue
         for shift, need in staffing.items():
+            if special.get(d, {}).get(shift, "") is None:
+                if any(a["shift"] == shift for a in day):
+                    issue("warn", f"Turno {SHIFT_NAME[shift].lower()} cerrado y tiene gente asignada", date=d, shift=shift)
+                continue
             for pos, n in need.items():
                 have = sum(1 for a in day if a["shift"] == shift and a["position"] == pos)
                 if have < n:
@@ -144,7 +342,7 @@ def analyze(year, month, assignments, employees, licenses, settings):
                 issue("error", f"{emp_by_id.get(eid, {}).get('name', eid)} está dos veces en el mismo turno", date=d, employee_id=eid)
 
     # --- por empleado: descansos, horas de 4, bloques, libres ---
-    timeline = employee_timeline(assignments)
+    timeline = employee_timeline(assignments, closures)
     weeks = weeks_of_month(year, month)
     report = []
     involved = {e["id"] for e in employees if e["active"]} | {a["employee_id"] for a in in_month}
@@ -168,11 +366,12 @@ def analyze(year, month, assignments, employees, licenses, settings):
             if m_start <= t[2] <= m_end:
                 counts[t[3]] += 1
         # sólo cuentan los días ya armados; los días de licencia no son libres
-        filled_days = [d for d in month_days if by_day.get(d)]
+        # los días con la estación cerrada no son libres ni cuentan para el tope
+        filled_days = [d for d in month_days if by_day.get(d) and d not in closed]
         libres = [d for d in filled_days if d not in worked_days and d not in lic_days]
         lic_in_month = [d for d in month_days if d in lic_days]
         avail = sum(1 for d in filled_days if d not in lic_days)
-        target = libres_target(target_libres, avail, n_days)
+        target = libres_target(target_libres, avail, n_days - len(closed))
         libres_armados = libres
 
         # días seguidos trabajados
@@ -215,7 +414,7 @@ def analyze(year, month, assignments, employees, licenses, settings):
             issue("warn", f"{emp['name']}: {len(h4_dates)} horas de 4 en el mes (máximo {max_h4})", employee_id=eid)
         if emp["active"] and len(libres) > target:
             issue("error", f"{emp['name']}: {len(libres)} libres, más de los {target} que le corresponden", employee_id=eid)
-        elif len(filled_days) == n_days and emp["active"] and len(libres) < target:
+        elif len(filled_days) == n_days - len(closed) and emp["active"] and len(libres) < target:
             issue("warn", f"{emp['name']}: {len(libres)} libres en el mes (le corresponden {target})", employee_id=eid)
 
         week_rows = []
@@ -242,10 +441,11 @@ def analyze(year, month, assignments, employees, licenses, settings):
             "semanas": week_rows,
         })
 
-    return {"issues": issues, "report": report, "weeks": [{"start": iso(a), "end": iso(b)} for a, b in weeks]}
+    return {"issues": issues, "report": report, "weeks": [{"start": iso(a), "end": iso(b)} for a, b in weeks],
+            "special": special}
 
 
-def day_layout(d, assignments, employees, licenses_days_map, staffing):
+def day_layout(d, assignments, employees, licenses_days_map, staffing, cl=()):
     """Estructura de un día como en la planilla en papel (usada por Excel y PDF)."""
     emp_by_id = {e["id"]: e for e in employees}
     day = [a for a in assignments if a["date"] == d]
@@ -261,7 +461,11 @@ def day_layout(d, assignments, employees, licenses_days_map, staffing):
                 out.append(n)
         return out
 
+    sp = special_hours(d, d, cl).get(d, {})
+
     def block(shift):
+        if shift in sp and sp[shift] is None:
+            return [("CERRADO", "")]
         rows = []
         labels = {"cajero": "CAJERO:" if shift == "T3" else "CAJERO PISTA:", "shop": "CAJERO SHOP:", "pistero": "PISTERO:",
                   "auxiliar": "AUXILIAR:", "otro": "OTRAS TAREAS:"}
@@ -279,11 +483,16 @@ def day_layout(d, assignments, employees, licenses_days_map, staffing):
     on_lic = [e for e in employees if d in licenses_days_map.get(e["id"], ()) and e["id"] not in worked]
     others = [e for e in employees if e["active"] and e["id"] not in worked and e not in on_lic]
     dd = parse_date(d)
+    all_closed = len(sp) == 3 and all(v is None for v in sp.values())
+    heads = {}
+    for sh, title in (("T3", "TURNO 3 (Noche)"), ("T1", "TURNO 1 (Mañana)"), ("T2", "TURNO 2 (Tarde)")):
+        heads[sh] = f"{title} {sp[sh]}" if sp.get(sh) else title
     return {
         "date": d,
-        "title": f"{DAY_NAMES[dd.weekday()]} {fmt_day(dd)}",
+        "title": f"{DAY_NAMES[dd.weekday()]} {fmt_day(dd)}" + (" · ESTACIÓN CERRADA" if all_closed else ""),
+        "heads": heads,
         "T3": block("T3"),
         "T1": block("T1"),
         "T2": block("T2"),
-        "libres": [e["name"].upper() for e in on_lic] + [e["name"].upper() for e in others] if day else [],
+        "libres": ([e["name"].upper() for e in on_lic] + [e["name"].upper() for e in others]) if day and not all_closed else [],
     }

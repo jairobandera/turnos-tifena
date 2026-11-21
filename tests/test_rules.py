@@ -74,3 +74,59 @@ def test_layout_planilla(conn):
     assert lay["T3"] == [("CAJERO:", "GUILLERMO"), ("PISTERO:", "LUIS")]
     assert lay["T1"][0] == ("CAJERO PISTA:", "JAIRO")
     assert lay["libres"][0] == "LAZARO"  # de licencia, primero
+
+
+def test_sugerencias_soledad_a_limpieza(conn):
+    emps = db.get_employees(conn)
+    st = db.get_settings(conn)
+    sol, andres = emp_id(conn, "Soledad"), emp_id(conn, "Andres")
+    d = "2026-12-10"
+    base = [a(d, "T2", "cajero", emp_id(conn, "Jairo")), a(d, "T2", "shop", sol),
+            a(d, "T2", "pistero", emp_id(conn, "Elias")), a(d, "T2", "pistero", emp_id(conn, "Rafael")),
+            a(d, "T2", "auxiliar", emp_id(conn, "Valeria"))]
+    # sin refuerzos ni faltantes: no hay nada que sugerir
+    assert rules.suggest(2026, 12, base, emps, st, db.parse_date("2026-12-01")) == []
+    # Andres de refuerzo (3er pistero) y sabe hacer spot -> sugerencia
+    s = rules.suggest(2026, 12, base + [a(d, "T2", "pistero", andres)], emps, st, db.parse_date("2026-12-01"))
+    assert len(s) == 1 and s[0]["employee_id"] == sol and s[0]["to_position"] == "auxiliar" and s[0]["covers"] == ["Andres", "Rafael"]
+    # falta auxiliar -> recomendado
+    sin_aux = [x for x in base if x["position"] != "auxiliar"]
+    s = rules.suggest(2026, 12, sin_aux, emps, st, db.parse_date("2026-12-01"))
+    assert s and s[0]["score"] >= 3
+    # días pasados no se sugieren
+    assert rules.suggest(2026, 12, base + [a(d, "T2", "pistero", andres)], emps, st, db.parse_date("2026-12-11")) == []
+
+
+CIERRES = [{"start": "2026-12-24T20:00", "end": "2026-12-25T20:00", "yearly": True, "note": "Navidad"},
+           {"start": "2026-12-31T20:00", "end": "2027-01-01T20:00", "yearly": True, "note": "Año Nuevo"}]
+
+
+def test_cierres_horarios_especiales():
+    cl = rules.expand_closures(CIERRES, "2027-12-01", "2028-01-31")   # se repiten todos los años
+    sp = rules.special_hours("2027-12-23", "2028-01-03", cl)
+    assert sp["2027-12-24"] == {"T2": "14:00 a 20:00"}
+    assert sp["2027-12-25"] == {"T3": None, "T1": None, "T2": None}
+    assert sp["2027-12-26"] == {"T3": "20:00 a 06:00"}          # la noche entra 20:00: 10 horas
+    assert sp["2028-01-02"] == {"T3": "20:00 a 06:00"}
+    assert rules.closed_days(sp) == {"2027-12-25", "2028-01-01"}
+
+
+def test_dia_cerrado_no_es_libre_ni_falta(conn):
+    emps = db.get_employees(conn)
+    cl = rules.expand_closures(CIERRES, "2026-12-01", "2026-12-31")
+    days = [db.iso(d) for d in db.date_range("2026-12-01", "2026-12-31") if db.iso(d) != "2026-12-25"]
+    assigns = [a(d, "T1", "cajero", emp_id(conn, "Jairo")) for d in days]
+    res = rules.analyze(2026, 12, assigns, emps, [], db.get_settings(conn), cl)
+    assert not [i for i in res["issues"] if i["date"] == "2026-12-25"]
+    luis = next(r for r in res["report"] if r["name"] == "Luis")
+    assert "2026-12-25" not in luis.get("libres_fechas", []) and luis["libres"] == 30
+
+
+def test_layout_dia_cerrado_y_noche_larga(conn):
+    emps = db.get_employees(conn)
+    cl = rules.expand_closures(CIERRES, "2026-12-01", "2026-12-31")
+    st = db.get_settings(conn)["staffing"]
+    lay = rules.day_layout("2026-12-25", [], emps, {}, st, cl)
+    assert lay["title"].endswith("ESTACIÓN CERRADA") and lay["T1"] == [("CERRADO", "")]
+    lay = rules.day_layout("2026-12-26", [a("2026-12-26", "T3", "cajero", emp_id(conn, "Jairo"))], emps, {}, st, cl)
+    assert lay["heads"]["T3"] == "TURNO 3 (Noche) 20:00 a 06:00"

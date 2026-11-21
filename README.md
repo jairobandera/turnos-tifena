@@ -20,6 +20,14 @@ Desde el celular en el mismo wifi: `http://IP-DE-LA-PC:5000`.
   Los avisos (rojo/amarillo) se recalculan al momento.
 - **Otras tareas**: el encargado puede asignarse *a sí mismo* tareas como "Corte de pasto". Ese turno trabaja
   (no suma libre) pero no ocupa puesto. Sólo para el empleado marcado como Encargado y vinculado a su usuario.
+- **Armar mes siguiente**: arma el mes que viene completo siguiendo la rotación del actual (queda en borrador).
+- **Sugerencias 💡**: detecta días en que conviene sacar a Soledad del spot a limpieza (puesto *Ocasional*) o
+  pasar al encargado a otras tareas cuando sobra gente. Cada sugerencia se puede **Simular** (vista previa de la
+  semana con los cambios en verde y antes/después de avisos y horas de 4) y **Aceptar**: reacomoda desde ese día
+  hasta fin de mes cambiando lo mínimo y guarda.
+- **Cierres de la estación** (Configuración): por defecto 24/12 y 31/12 de 20:00 a 20:00 del día siguiente, todos
+  los años. Ese día no se asigna a nadie ni cuenta como libre; la tarde del 24/12 y del 31/12 termina a las 20:00 y la noche
+  del 26/12 y del 02/01 entra a las 20:00 (10 horas).
 - **Guardar / Publicar**: los empleados sólo ven los meses publicados.
 - **Exportar** semana o mes a PDF/Excel con el formato de la planilla (Turno 3, Turno 1, Turno 2, Libres)
   y compartir por WhatsApp (en el celular abre WhatsApp con el archivo adjunto).

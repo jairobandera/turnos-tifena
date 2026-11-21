@@ -4,7 +4,7 @@ Ejecutar:  python backend/app.py   ->  http://localhost:5000
 """
 import os
 import secrets
-from datetime import timedelta
+from datetime import date, timedelta
 from functools import wraps
 
 from flask import Flask, jsonify, request, send_file, send_from_directory, session
@@ -73,8 +73,29 @@ def with_history(c, year, month, month_assignments=None):
     return hist + [a for a in month_assignments if db.iso(first) <= a["date"] <= db.iso(last)]
 
 
+def closures(c, start, end):
+    return rules.expand_closures(db.get_closures(c), start, end)
+
+
+def month_closures(c, year, month):
+    first, last = db.month_bounds(year, month)
+    return closures(c, first - timedelta(days=HISTORY + 1), last + timedelta(days=1))
+
+
 def analysis(c, year, month, assignments):
-    return rules.analyze(year, month, assignments, db.get_employees(c), db.get_licenses(c), db.get_settings(c))
+    emps, settings = db.get_employees(c), db.get_settings(c)
+    res = rules.analyze(year, month, assignments, emps, db.get_licenses(c), settings, month_closures(c, year, month))
+    # "otras tareas" sólo se sugieren al encargado logueado, para sí mismo
+    res["suggestions"] = rules.suggest(year, month, assignments, emps, settings, date.today(),
+                                       only_encargado=my_employee_id(c) or -1)
+    return res
+
+
+def my_employee_id(c):
+    if not session.get("user_id"):
+        return None
+    r = c.execute("SELECT employee_id FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    return r["employee_id"] if r else None
 
 
 # ---------------- páginas ----------------
@@ -120,7 +141,8 @@ def api_schedule():
     rows = [a for a in db.get_assignments(c, start, end)
             if (int(a["date"][:4]), int(a["date"][5:7])) in pub]
     published_days = [db.iso(d) for d in db.date_range(start, end) if (d.year, d.month) in pub]
-    return jsonify({"assignments": rows, "published_days": published_days})
+    return jsonify({"assignments": rows, "published_days": published_days,
+                    "special": rules.special_hours(start, end, closures(c, start, end))})
 
 
 # ---------------- sesión ----------------
@@ -245,11 +267,89 @@ def admin_generate():
     current = data.get("assignments")
     assigns = with_history(c, year, month, current)
     res = scheduler.generate(year, month, db.get_employees(c), assigns, db.get_licenses(c), db.get_settings(c),
-                             desde=data.get("desde"), mode=mode)
+                             desde=data.get("desde"), mode=mode, closures=month_closures(c, year, month))
     if not res["ok"]:
         return bad(res["msg"], 422)
     res["analysis"] = analysis(c, year, month, with_history(c, year, month, res["assignments"]))
     return jsonify(res)
+
+
+@app.post("/api/admin/reflow")
+@admin_required
+def admin_reflow():
+    """Cambia a alguien de puesto un día (ej. Soledad a limpieza), lo fija y reacomoda desde ese día a fin de mes."""
+    c = conn()
+    data = request.get_json(force=True)
+    year, month = month_args(data)
+    day, shift, eid = data.get("date"), data.get("shift"), int(data.get("employee_id", 0))
+    to = data.get("to_position")
+    current = [dict(a) for a in data.get("assignments", [])]
+    target = next((a for a in current if a["date"] == day and a["shift"] == shift and int(a["employee_id"]) == eid), None)
+    if not target:
+        return bad("Esa persona ya no está en ese turno; actualizá la página.")
+    if to == db.TASK:
+        emp = next((e for e in db.get_employees(c) if e["id"] == eid), None)
+        if eid != my_employee_id(c) or not emp or db.TASK not in emp["positions"]:
+            return bad("Sólo el encargado puede asignarse \"otras tareas\" a sí mismo.", 403)
+        target["position"] = db.TASK
+        target["note"] = (data.get("note") or "Corte de pasto").strip()[:60]
+    elif to:
+        if to not in db.POSITIONS or not db.get_settings(c)["staffing"].get(shift, {}).get(to):
+            return bad("Puesto inválido para ese turno")
+        target["position"] = to
+    target["locked"] = True
+    res = scheduler.generate(year, month, db.get_employees(c), with_history(c, year, month, current),
+                             db.get_licenses(c), db.get_settings(c), desde=day, mode="rehacer",
+                             closures=month_closures(c, year, month))
+    if not res["ok"]:
+        return bad(res["msg"], 422)
+    res["analysis"] = analysis(c, year, month, with_history(c, year, month, res["assignments"]))
+    return jsonify(res)
+
+
+# ---------------- cierres de la estación ----------------
+
+@app.get("/api/closures")
+def api_closures():
+    return jsonify(db.get_closures(conn()))
+
+
+def _closure_payload(data):
+    start, end = (data.get("start") or "").strip(), (data.get("end") or "").strip()
+    try:
+        s_abs, e_abs = rules._abs_hour(start), rules._abs_hour(end)
+    except Exception:
+        raise ValueError("Fechas u horas inválidas")
+    if e_abs <= s_abs:
+        raise ValueError("La reapertura tiene que ser después del cierre")
+    return start[:16], end[:16], (data.get("note") or "").strip()[:60], 1 if data.get("yearly") else 0
+
+
+@app.post("/api/admin/closures")
+@admin_required
+def admin_closure_create():
+    c = conn()
+    cur = c.execute("INSERT INTO closures(start, end, note, yearly) VALUES (?, ?, ?, ?)", _closure_payload(request.get_json(force=True)))
+    c.commit()
+    return jsonify({"id": cur.lastrowid})
+
+
+@app.put("/api/admin/closures/<int:cid>")
+@admin_required
+def admin_closure_update(cid):
+    c = conn()
+    c.execute("UPDATE closures SET start = ?, end = ?, note = ?, yearly = ? WHERE id = ?", (*_closure_payload(request.get_json(force=True)), cid))
+    c.commit()
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/admin/closures/<int:cid>")
+@admin_required
+def admin_closure_delete(cid):
+    c = conn()
+    c.execute("DELETE FROM closures WHERE id = ?", (cid,))
+    c.commit()
+    return jsonify({"ok": True})
 
 
 # ---------------- admin: licencias ----------------
@@ -425,7 +525,8 @@ def admin_export(fmt):
     wk_start = s - timedelta(days=s.weekday())
     wk_end = e + timedelta(days=6 - e.weekday())
     assigns = db.get_assignments(c, wk_start, wk_end)
-    weeks = build_weeks(s, e, assigns, db.get_employees(c), db.get_licenses(c), db.get_settings(c)["staffing"])
+    weeks = build_weeks(s, e, assigns, db.get_employees(c), db.get_licenses(c), db.get_settings(c)["staffing"],
+                        closures(c, wk_start - timedelta(days=1), wk_end + timedelta(days=1)))
     if s.day == 1 and e == db.month_bounds(s.year, s.month)[1]:
         name = f"Turnos {MONTHS[s.month - 1].capitalize()} {s.year}"
     else:

@@ -14,6 +14,12 @@ function posLabel(shift, pos) {
   return { shop: "CAJERO SHOP:", pistero: "PISTERO:", auxiliar: "AUXILIAR:", otro: "OTRAS TAREAS:" }[pos];
 }
 
+/** Horarios especiales por cierres: {fecha: {turno: null (cerrado) | "20:00 a 06:00"}} */
+function dayIsClosed(special, date) {
+  const sp = special && special[date];
+  return !!sp && ["T3", "T1", "T2"].every((k) => k in sp && sp[k] === null);
+}
+
 function posFullName(shift, pos, note) {
   if (pos === TASK) return note ? `Otras tareas: ${note}` : "Otras tareas";
   return pos === "cajero" && shift !== "T3" ? "Cajero Pista" : POS_NAME[pos];
@@ -50,6 +56,7 @@ function renderDay(date, assigns, ctx) {
     const name = emp ? emp.name : `#${a.employee_id}`;
     const cls = ["chip"];
     if (ctx.highlight === a.employee_id) cls.push("me");
+    if (ctx.changed && ctx.changed.has(`${date}|${shift}|${pos}|${a.employee_id}`)) cls.push("new");
     const st = issueFor(a.employee_id);
     if (st && ctx.editable) cls.push(st);
     let tags = "";
@@ -58,6 +65,7 @@ function renderDay(date, assigns, ctx) {
       const lvl = emp.positions[pos];
       if (!lvl) tags += `<span class="tagmini out" title="No es su puesto">FUERA</span>`;
       else if (lvl === "suplente") tags += `<span class="tagmini sup" title="Suplente">SUP</span>`;
+      else if (lvl === "ocasional") tags += `<span class="tagmini sup" title="Puesto ocasional">${pos === "auxiliar" ? "LIMPIEZA" : "OCAS"}</span>`;
     }
     tags = note + tags;
     if (!ctx.editable) return `<li class="${cls.join(" ")}">${E(name)}${note}</li>`;
@@ -67,7 +75,14 @@ function renderDay(date, assigns, ctx) {
       <button class="x" data-remove="${a._i}" title="Quitar" aria-label="Quitar ${E(name)}">✕</button></li>`;
   };
 
+  const sp = (ctx.special && ctx.special[date]) || {};
+  const allClosed = dayIsClosed(ctx.special, date);
   const shiftCol = (s) => {
+    if (s.key in sp && sp[s.key] === null) {
+      return `<section class="shift ${s.key} closed"><div class="shift-head">${s.head}<span class="hours">cerrado</span></div>
+        <div class="shift-rows"><div class="closed-msg">CERRADO</div></div></section>`;
+    }
+    const hours = sp[s.key] || s.hours;
     const need = (ctx.staffing && ctx.staffing[s.key]) || {};
     const present = new Set(assigns.filter((a) => a.shift === s.key).map((a) => a.position));
     const rows = [...POSITIONS, TASK].filter((p) => (need[p] || 0) > 0 || present.has(p)).map((p) => {
@@ -85,13 +100,13 @@ function renderDay(date, assigns, ctx) {
         <div><ul class="slot${under}" data-date="${date}" data-shift="${s.key}" data-pos="${p}">${inner}</ul>${add}</div></div>`;
     }).join("");
     const task = ctx.editable && ctx.canTask && !present.has(TASK) ? `<button class="add task" data-add="${date}|${s.key}|${TASK}">+ otra tarea</button>` : "";
-    return `<section class="shift ${s.key}"><div class="shift-head">${s.head}<span class="hours">${s.hours}</span></div>
+    return `<section class="shift ${s.key}${sp[s.key] ? " special" : ""}"><div class="shift-head">${s.head}<span class="hours">${hours}${sp[s.key] ? " ⚠️" : ""}</span></div>
       <div class="shift-rows">${rows}${task}</div></section>`;
   };
 
   // libres: licencias primero, igual que en la planilla
   let libresHtml = "";
-  if (assigns.length || ctx.editable) {
+  if ((assigns.length || ctx.editable) && !allClosed) {
     const free = [...ctx.emps.values()].filter((e) => e.active && !worked.has(e.id));
     const onLic = free.filter((e) => ctx.licDays.get(e.id)?.has(date));
     const rest = free.filter((e) => !onLic.includes(e));
@@ -118,8 +133,13 @@ function renderDay(date, assigns, ctx) {
   }
 
   const tag = ctx.unpublished ? `<span class="tag badge">Sin publicar</span>` : "";
+  let sugHtml = "";
+  if (ctx.editable && ctx.suggestions) {
+    sugHtml = ctx.suggestions.map((x, i) => (x.date !== date ? "" : `<div class="suggest">💡 <span>${suggestionText(x)}. <small>${E(x.reasons.join(" · "))}</small></span>
+      <button class="btn small" data-suggest="${i}">🔎 Simular</button></div>`)).join("");
+  }
   return `<article class="day ${ctx.unpublished ? "unpublished" : ""}" data-date="${date}">
-    <div class="day-title">${D.title(date)}${tag}</div>
+    <div class="day-title">${D.title(date)}${allClosed ? ' <span class="badge closed-badge">ESTACIÓN CERRADA</span>' : ""}${tag}</div>${sugHtml}
     <div class="day-body">${SHIFTS.map(shiftCol).join("")}
       <section class="shift libres"><div class="shift-head">LIBRES</div>
       <div class="shift-rows"><ul class="libre-list" data-date="${date}">${libresHtml}</ul></div></section>
@@ -137,6 +157,9 @@ function renderMyDays(dates, assignsByDay, empId, ctx) {
       return `<div class="myday L">${head}<div class="what muted">Sin publicar</div></div>`;
     }
     const mine = (assignsByDay.get(d) || []).filter((a) => a.employee_id === empId);
+    if (!mine.length && dayIsClosed(ctx.special, d)) {
+      return `<div class="myday L">${head}<div class="what">Estación cerrada</div></div>`;
+    }
     if (!mine.length) {
       if (ctx.licDays.get(empId)?.has(d)) { counts.LIC++; return `<div class="myday LIC">${head}<div class="what">Licencia</div></div>`; }
       counts.L++;
@@ -145,7 +168,8 @@ function renderMyDays(dates, assignsByDay, empId, ctx) {
     return mine.map((a) => {
       counts[a.shift]++;
       const s = SHIFT_BY_KEY[a.shift];
-      return `<div class="myday ${a.shift}">${head}<div class="what">${s.name} · ${s.hours}<small>${E(posFullName(a.shift, a.position, a.note))}${a.shift === "T3" ? " (entra la noche anterior)" : ""}</small></div></div>`;
+      const hrs = (ctx.special && ctx.special[d] && ctx.special[d][a.shift]) || s.hours;
+      return `<div class="myday ${a.shift}">${head}<div class="what">${s.name} · ${hrs}<small>${E(posFullName(a.shift, a.position, a.note))}${a.shift === "T3" ? " (entra la noche anterior)" : ""}</small></div></div>`;
     }).join("");
   }).join("");
   const summary = `<div class="summary"><span class="pill">🌅 Mañanas: <b>${counts.T1}</b></span><span class="pill">🌇 Tardes: <b>${counts.T2}</b></span>

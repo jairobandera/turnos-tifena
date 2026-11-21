@@ -154,6 +154,18 @@ main { max-width: 1180px; margin: 0 auto; padding: 14px 16px 90px; }
 .sortable-ghost { opacity: .35; }
 .sortable-chosen { box-shadow: 0 4px 14px rgba(0, 0, 0, .18); }
 
+.chip.new { background: #dcfce7 !important; border-color: #16a34a !important; }
+.sheet.wide { max-width: 1100px; }
+.sheet .sticky-actions { position: sticky; bottom: calc(-16px - env(safe-area-inset-bottom)); background: #fff; padding: 10px 0; margin-bottom: -6px; border-top: 1px solid var(--soft-line); }
+table.cmp { max-width: 520px; }
+.suggest { text-transform: none; display: flex; gap: 8px; align-items: center; padding: 6px 10px; background: #eef6ff; border-bottom: 1px solid #c9ddf5; font-size: 13px; color: #123d66; }
+.suggest span { flex: 1; }
+.suggest small { color: #4b6480; }
+.suggest-alert { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.shift.closed .shift-head { background: #eceff3; color: #6b7280; }
+.closed-msg { text-align: center; font-weight: 800; letter-spacing: 2px; color: #9aa1ab; padding: 14px 0; }
+.shift.special .shift-head .hours { color: #b45309; font-weight: 700; }
+.closed-badge { background: #374151; color: #fff; }
 .issues { text-transform: none; border-top: 1px solid var(--soft-line); padding: 6px 10px; font-size: 13px; }
 .issues summary { cursor: pointer; font-weight: 600; color: var(--warn); }
 .issues.has-err summary { color: var(--err); }

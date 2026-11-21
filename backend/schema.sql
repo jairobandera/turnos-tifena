@@ -44,6 +44,15 @@ CREATE TABLE IF NOT EXISTS licenses (
     created_at  TEXT
 );
 
+-- cierres de la estación (ej. 24/12 20:00 -> 25/12 20:00). yearly = se repite todos los años
+CREATE TABLE IF NOT EXISTS closures (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    start  TEXT NOT NULL,     -- 'YYYY-MM-DDTHH:MM'
+    end    TEXT NOT NULL,
+    note   TEXT NOT NULL DEFAULT '',
+    yearly INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL

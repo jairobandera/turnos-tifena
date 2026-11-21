@@ -25,7 +25,7 @@ def build_pdf(weeks, title="Turnos"):
         for day in w["days"]:
             n = rows_needed(day)
             data = [[day["title"], "", "", "", "", "", ""],
-                    ["TURNO 3 (Noche)", "", "TURNO 1 (Mañana)", "", "TURNO 2 (Tarde)", "", "LIBRES"]]
+                    [day["heads"]["T3"], "", day["heads"]["T1"], "", day["heads"]["T2"], "", "LIBRES"]]
             for i in range(n):
                 row = []
                 for key in ("T3", "T1", "T2"):

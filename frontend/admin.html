@@ -53,6 +53,7 @@
         </div>
         <div class="actionbar fixed-mobile toolbar">
           <button class="btn accent" id="b-generate">⚙️ Generar</button>
+          <button class="btn" id="b-nextmonth" title="Arma el mes siguiente completo">📅 Armar mes siguiente</button>
           <button class="btn primary" id="b-save">💾 Guardar</button>
           <button class="btn" id="b-publish">📢 Publicar</button>
           <button class="btn" id="b-undo" disabled>↶ Deshacer</button>
@@ -98,7 +99,7 @@
       <section id="tab-empleados" hidden>
         <div class="card">
           <h3>Empleados y puestos</h3>
-          <p class="muted" style="margin-top:0">Principal = su puesto habitual. Suplente = lo cubre cuando falta alguien. El generador usa primero a los principales. <b>Encargado</b>: puede asignarse a sí mismo "Otras tareas" (corte de pasto, mantenimiento…); ese turno trabaja pero no ocupa puesto. Tiene que estar vinculado a su usuario en Configuración.</p>
+          <p class="muted" style="margin-top:0">Principal = su puesto habitual. Suplente = lo cubre cuando falta alguien. El generador usa primero a los principales. <b>Ocasional</b> = el generador no lo pone solo: la app lo sugiere (💡) y vos decidís (ej. Soledad a limpieza). <b>Encargado</b>: puede asignarse a sí mismo "Otras tareas" (corte de pasto, mantenimiento…); ese turno trabaja pero no ocupa puesto. Tiene que estar vinculado a su usuario en Configuración.</p>
           <div class="table-wrap" id="emp-table"></div>
         </div>
       </section>
@@ -120,6 +121,19 @@
             <h3 style="margin-top:16px">Dotación por turno</h3>
             <div class="table-wrap" id="staffing"></div>
             <div class="actionbar" style="margin-top:12px"><button class="btn primary">Guardar configuración</button></div>
+          </form>
+        </div>
+        <div class="card">
+          <h3>Cierres de la estación</h3>
+          <p class="muted" style="margin-top:0">Mientras la estación está cerrada no se asigna a nadie y ese día no cuenta como libre.
+            Si un turno queda con menos de 4 horas abiertas, ese rato lo cubre el turno de al lado. Ej.: reabre el 25/12 a las 20:00, entonces el cajero y el pistero de la noche entran a las 20:00 y hacen 10 horas.</p>
+          <div class="table-wrap" id="closures"></div>
+          <form id="closure-form" class="form-grid" style="margin-top:12px">
+            <label class="field">Motivo<input name="note" placeholder="Ej: Navidad" maxlength="60"></label>
+            <label class="field">Cierra el<input type="datetime-local" name="start" required></label>
+            <label class="field">Abre el<input type="datetime-local" name="end" required></label>
+            <label class="field" style="flex-direction:row;align-items:center;gap:8px;color:var(--ink)"><input type="checkbox" name="yearly" style="width:20px;height:20px"> Se repite todos los años</label>
+            <div class="actionbar" style="align-items:flex-end"><button class="btn primary">Agregar cierre</button></div>
           </form>
         </div>
         <div class="card">

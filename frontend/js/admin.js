@@ -169,15 +169,23 @@ function renderTurnos(keepScroll) {
   let alerts = "";
   if (A.lastGen) {
     const g = A.lastGen;
-    alerts += `<div class="alert ok">✅ Turnos generados del ${D.dm(D.parse(g.generated_days[0]))} al ${D.dm(D.parse(g.generated_days[g.generated_days.length - 1]))}. Revisalos y tocá <b>Guardar</b>.</div>`;
+    if (g.msgDone) alerts += `<div class="alert ok">✅ ${g.msgDone}</div>`;
+    else alerts += `<div class="alert ok">✅ Turnos generados del ${D.dm(D.parse(g.generated_days[0]))} al ${D.dm(D.parse(g.generated_days[g.generated_days.length - 1]))}. Revisalos y tocá <b>Guardar</b>.</div>`;
     if (g.faltantes.length) alerts += `<div class="alert error">No alcanzó el personal para: ${g.faltantes.map(UI.esc).join(" · ")}</div>`;
     if (!g.estricto) alerts += `<div class="alert">No se pudo respetar 100% el 4-4-4 de cajeros; mirá los avisos de cada día.</div>`;
   }
   if (empty) alerts += `<div class="alert info">${empty} día(s) del mes sin armar. Usá <b>Generar</b> para completarlos.</div>`;
+  const sugs = (A.analysis && A.analysis.suggestions) || [];
+  if (sugs.length) {
+    const names = [...new Set(sugs.map((x) => x.name))].join(", ");
+    alerts += `<div class="alert info suggest-alert">💡 <b>${sugs.length} sugerencia${sugs.length > 1 ? "s" : ""}</b> para ${UI.esc(names)}: días en que conviene sacar a alguien de la lista (limpieza u otras tareas).
+      <button class="btn small" id="b-sugs">Ver</button></div>`;
+  }
   if (general.length) {
     alerts += `<details class="alert"><summary><b>${general.length} aviso(s) del mes</b> (libres, horas de 4)</summary><ul style="margin:6px 0 0;padding-left:18px">${general.map((i) => `<li>${UI.esc(i.msg)}</li>`).join("")}</ul></details>`;
   }
   $("#m-alerts").innerHTML = alerts;
+  if ($("#b-sugs")) $("#b-sugs").onclick = showSuggestions;
 
   // pestañas de semana
   const weeks = D.weeksOfMonth(A.year, A.month);
@@ -192,6 +200,8 @@ function renderTurnos(keepScroll) {
     byDay.get(a.date).push(a);
   });
   const ctx = { emps: A.emps, staffing: A.settings.staffing, licDays: A.licDays, editable: true, highlight: A.highlight, issues,
+    suggestions: (A.analysis && A.analysis.suggestions) || [],
+    special: (A.analysis && A.analysis.special) || {},
     canTask: A.me && canTask(A.me.employee_id) };
   $("#days").innerHTML = days.map((d) => renderDay(d, byDay.get(d) || [], ctx)).join("");
   initSortables();
@@ -354,6 +364,7 @@ function chipMenu(idx) {
     <div class="opts">
       <button class="opt" data-act="lock"><span>${a.locked ? "🔓 Quitar candado" : "🔒 Fijar (el generador no lo toca)"}</span></button>
       <button class="opt" data-act="replace"><span>🔁 Reemplazar por otra persona</span></button>
+      <button class="opt" data-act="reflow"><span>♻️ Fijar acá y reacomodar desde este día</span><small>rearma ${D.dm(D.parse(a.date))} a fin de mes</small></button>
       ${a.position === TASK && canTask(a.employee_id) ? `<button class="opt" data-act="note"><span>✏️ Cambiar la tarea</span><small>${UI.esc(a.note || "")}</small></button>` : ""}
       <div class="group-title">Mover dentro del día a…</div>
       ${moves.map(([s, p]) => `<button class="opt" data-act="move" data-s="${s}" data-p="${p}"><span>${SHIFT_BY_KEY[s].name} · ${posFullName(s, p)}</span><small>${restHint(a.employee_id, a.date, s) || ""}</small></button>`).join("")}
@@ -367,6 +378,7 @@ function chipMenu(idx) {
     const act = b.dataset.act;
     s.close();
     if (act === "replace") return pickEmployee(a.date, a.shift, a.position, idx);
+    if (act === "reflow") return reflow(a, null, `${emp ? emp.name : ""} queda fijo el ${D.dm(D.parse(a.date))}`);
     if (act === "note") return askTask(a.note, (note) => { pushUndo(); a.note = note; markDirty(); });
     if (act === "move" && b.dataset.p === TASK) {
       return askTask(a.note, (note) => {
@@ -400,6 +412,8 @@ function bindTurnos() {
       const [date, shift, pos] = add.dataset.add.split("|");
       return pickEmployee(date, shift, pos);
     }
+    const sug = e.target.closest("[data-suggest]");
+    if (sug) return applySuggestion(A.analysis.suggestions[Number(sug.dataset.suggest)]);
     const chip = e.target.closest(".chip[data-idx]");
     if (chip) return chipMenu(Number(chip.dataset.idx));
   });
@@ -427,6 +441,7 @@ function bindTurnos() {
   $("#b-save").onclick = saveMonth;
   $("#b-publish").onclick = togglePublish;
   $("#b-generate").onclick = generateDialog;
+  $("#b-nextmonth").onclick = buildNextMonth;
   $("#b-export").onclick = exportDialog;
 }
 
@@ -461,6 +476,154 @@ async function togglePublish() {
   A.status = r.status;
   UI.toast(publish ? "Publicado: los empleados ya lo ven" : "Pasó a borrador: los empleados no lo ven");
   renderTurnos(true);
+}
+
+// ============ sugerencias, simulación y reacomodo ============
+
+function suggestionText(x) {
+  let to;
+  if (x.to_position === "auxiliar") to = "Auxiliar (limpieza)";
+  else if (x.to_position === TASK) to = `otras tareas (${UI.esc(x.note || "")})`;
+  else to = posFullName(x.shift, x.to_position);
+  return `Pasar a <b>${UI.esc(x.name.toUpperCase())}</b> de ${posFullName(x.shift, x.from_position)} a ${to} a la ${SHIFT_BY_KEY[x.shift].name.toLowerCase()}`;
+}
+
+function showSuggestions() {
+  const sugs = A.analysis.suggestions;
+  const html = `<h3>💡 Sugerencias</h3>
+    <div class="sub">Tocá una para <b>simularla</b>: vas a ver cómo quedarían los turnos antes de aceptar. Si aceptás, se reacomoda desde ese día hasta fin de mes; los días anteriores no se tocan.</div>
+    <div class="opts">${sugs.map((x, i) => `<button class="opt" data-i="${i}"><span>${D.SHORT[D.wd(D.parse(x.date))]} ${D.dm(D.parse(x.date))} · ${suggestionText(x)}
+      <br><small>${x.score >= 3 ? "⭐ Recomendado: " : ""}${UI.esc(x.reasons.join(" · "))}</small></span><small>Simular ›</small></button>`).join("")}</div>
+    <div class="actions"><button class="btn" data-close>Cerrar</button></div>`;
+  const s = UI.sheet(html);
+  s.el.querySelector(".opts").onclick = (e) => {
+    const b = e.target.closest("[data-i]");
+    if (!b) return;
+    s.close();
+    applySuggestion(sugs[Number(b.dataset.i)]);
+  };
+}
+
+function applySuggestion(x) {
+  const a = A.assignments.find((y) => y.date === x.date && y.shift === x.shift && y.employee_id === x.employee_id);
+  if (!a) return UI.toast("Ese turno cambió; volvé a mirar las sugerencias.", 4000);
+  const to = x.to_position === "auxiliar" ? "limpieza" : x.to_position === TASK ? (x.note || "otras tareas").toLowerCase() : POS_NAME[x.to_position];
+  simulate(a, x.to_position, `${x.name} pasa a ${to} el ${D.dm(D.parse(x.date))} (${SHIFT_BY_KEY[x.shift].name.toLowerCase()})`, x.note);
+}
+
+/** Desde el menú de una persona: fijarla donde está y reacomodar desde ese día. */
+function reflow(a, toPosition, label) {
+  simulate(a, toPosition, label);
+}
+
+/** Pide al servidor el reacomodo (no guarda nada) y muestra la vista previa. */
+async function simulate(a, toPosition, label, note) {
+  const stop = UI.busy(`Simulando desde el ${D.dm(D.parse(a.date))}… (puede tardar hasta ${A.settings.tiempo_generador || 25} segundos)`);
+  let r;
+  try {
+    const clean = A.assignments.map(({ _i, ...x }) => x);
+    r = await API.post("/api/admin/reflow", {
+      year: A.year, month: A.month, date: a.date, shift: a.shift, employee_id: a.employee_id,
+      to_position: toPosition, note, assignments: clean,
+    });
+  } catch (err) {
+    stop();
+    return UI.toast("No se pudo simular: " + err.message, 5000);
+  }
+  stop();
+  showPreview(a.date, r, label);
+}
+
+function metrics(an) {
+  const vis = an.issues.filter((i) => i.level !== "info");
+  return {
+    errores: vis.filter((i) => i.level === "error").length,
+    avisos: vis.filter((i) => i.level === "warn").length,
+    h4: an.report.reduce((n, r) => n + r.horas4, 0),
+    libresMal: an.report.filter((r) => r.libres !== r.libres_objetivo && (A.emps.get(r.employee_id) || {}).active).length,
+  };
+}
+
+function showPreview(fromDate, r, label) {
+  const key = (x) => `${x.date}|${x.shift}|${x.position}|${x.employee_id}`;
+  const before = new Set(A.assignments.map(key));
+  const changed = new Set(r.assignments.filter((x) => !before.has(key(x))).map(key));
+  const changedDays = new Set([...changed].map((k) => k.split("|")[0])).size;
+  const m0 = metrics(A.analysis), m1 = metrics(r.analysis);
+  const row = (label, a, b) => {
+    const cls = b < a ? "good" : b > a ? "bad" : "";
+    return `<tr><td>${label}</td><td class="num">${a}</td><td class="num ${cls}">${b}</td></tr>`;
+  };
+  const weeks = D.weeksOfMonth(A.year, A.month).filter((w) => w.days[w.days.length - 1] >= fromDate);
+  const byDay = new Map();
+  for (const x of r.assignments) { if (!byDay.has(x.date)) byDay.set(x.date, []); byDay.get(x.date).push(x); }
+  const ctx = { emps: A.emps, staffing: A.settings.staffing, licDays: A.licDays, editable: false, highlight: A.highlight, changed,
+    special: r.analysis.special || {} };
+  const [, last] = D.monthBounds(A.year, A.month);
+  const html = `<h3>🔎 Simulación</h3>
+    <div class="sub">${UI.esc(label)}. Se reacomodarían los turnos del <b>${D.dm(D.parse(fromDate))} al ${D.dm(last)}</b>:
+      ${changed.size} cambio(s) en ${changedDays} día(s), marcados en <span class="chip new" style="display:inline-flex">verde</span>. Todavía no se cambió nada.</div>
+    ${r.faltantes && r.faltantes.length ? `<div class="alert error">Quedaría sin cubrir: ${r.faltantes.map(UI.esc).join(" · ")}</div>` : ""}
+    <table class="grid cmp"><thead><tr><th></th><th class="num">Ahora</th><th class="num">Con el cambio</th></tr></thead><tbody>
+      ${row("Errores (rojo)", m0.errores, m1.errores)}${row("Avisos (amarillo)", m0.avisos, m1.avisos)}
+      ${row("Horas de 4 en el mes", m0.h4, m1.h4)}${row("Personas con libres fuera de lo que les toca", m0.libresMal, m1.libresMal)}
+    </tbody></table>
+    <div class="week-tabs" id="pv-weeks" style="margin-top:12px">${weeks.map((w, i) => `<button data-w="${i}" class="${i === 0 ? "active" : ""}">${D.dm(D.parse(w.days[0]))} – ${D.dm(D.parse(w.days[w.days.length - 1]))}</button>`).join("")}</div>
+    <div id="pv-days"></div>
+    <div class="actions sticky-actions"><button class="btn" data-close>Descartar</button><button class="btn primary" id="pv-ok">✔ Aceptar y guardar</button></div>`;
+  const s = UI.sheet(html);
+  s.el.classList.add("wide");
+  const showWeek = (i) => {
+    $$("#pv-weeks button", s.el).forEach((b) => b.classList.toggle("active", Number(b.dataset.w) === i));
+    $("#pv-days", s.el).innerHTML = weeks[i].days.map((d) => renderDay(d, byDay.get(d) || [], ctx)).join("");
+  };
+  $("#pv-weeks", s.el).onclick = (e) => { const b = e.target.closest("button"); if (b) showWeek(Number(b.dataset.w)); };
+  showWeek(0);
+  $("#pv-ok", s.el).onclick = async () => {
+    s.close();
+    pushUndo();
+    A.assignments = r.assignments;
+    A.analysis = r.analysis;
+    A.dirty = true;
+    const wi = D.weeksOfMonth(A.year, A.month).findIndex((w) => w.days.includes(fromDate));
+    if (wi >= 0) A.week = wi;
+    if (await saveMonth()) {
+      A.lastGen = { msgDone: `${UI.esc(label)}. Se reacomodó del ${D.dm(D.parse(fromDate))} al ${D.dm(last)} y quedó guardado.`, faltantes: r.faltantes || [], estricto: r.estricto };
+      renderTurnos(true);
+    }
+  };
+}
+
+/** Guarda este mes, pasa al siguiente y lo arma completo (queda en borrador para revisar). */
+async function buildNextMonth() {
+  const d = new Date(A.year, A.month, 1);
+  const name = `${D.MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+  const ok = await UI.confirm(`Armar ${name}`,
+    `Se ${A.dirty ? "guarda este mes y se " : ""}arma ${name} completo, siguiendo la rotación de cómo termina ${D.MONTHS[A.month - 1]}. Queda en <b>borrador</b> para que lo revises antes de publicar. Si ${name} ya tiene días armados, sólo se completan los vacíos.`,
+    `Armar ${name}`);
+  if (!ok) return;
+  if (A.dirty && !(await saveMonth())) return;
+  A.year = d.getFullYear();
+  A.month = d.getMonth() + 1;
+  await loadMonth();
+  if (!A.analysis.issues.some((i) => i.msg === "Día sin armar")) {
+    return UI.toast(`${name} ya estaba armado completo`, 4000);
+  }
+  const stop = UI.busy(`Armando ${name}… (puede tardar hasta ${A.settings.tiempo_generador || 25} segundos)`);
+  try {
+    const clean = A.assignments.map(({ _i, ...a }) => a);
+    const r = await API.post("/api/admin/generate", { year: A.year, month: A.month, mode: "completar", assignments: clean });
+    A.assignments = r.assignments;
+    A.analysis = r.analysis;
+    A.lastGen = r;
+    A.dirty = true;
+    A.week = 0;
+    renderTurnos();
+  } catch (err) {
+    UI.toast("No se pudo armar: " + err.message, 5000);
+  } finally {
+    stop();
+  }
 }
 
 function generateDialog() {
@@ -695,7 +858,8 @@ function renderEmployees() {
     const v = e ? e.positions[p] || "" : "";
     return `<select class="input" data-pos="${p}"><option value="" ${v === "" ? "selected" : ""}>—</option>
       <option value="principal" ${v === "principal" ? "selected" : ""}>Principal</option>
-      <option value="suplente" ${v === "suplente" ? "selected" : ""}>Suplente</option></select>`;
+      <option value="suplente" ${v === "suplente" ? "selected" : ""}>Suplente</option>
+      <option value="ocasional" ${v === "ocasional" ? "selected" : ""}>Ocasional</option></select>`;
   };
   const row = (e) => `<tr data-id="${e ? e.id : ""}" ${e && !e.active ? 'style="opacity:.55"' : ""}>
       <td><input class="input" data-name value="${e ? UI.esc(e.name) : ""}" placeholder="Nombre" style="min-width:120px"></td>
@@ -726,6 +890,57 @@ function renderEmployees() {
   };
 }
 
+// ============ cierres de la estación ============
+
+async function renderClosures() {
+  const list = await API.get("/api/closures");
+  const fmt = (s, yearly) => `${D.dm(D.parse(s.slice(0, 10)))}${yearly ? "" : "/" + s.slice(0, 4)} ${s.slice(11, 16)}`;
+  $("#closures").innerHTML = list.length ? `<table class="grid"><thead><tr><th>Motivo</th><th>Cierra</th><th>Abre</th><th>Repite</th><th></th></tr></thead><tbody>
+    ${list.map((c) => `<tr><td><b>${UI.esc(c.note || "Cierre")}</b></td><td>${fmt(c.start, c.yearly)}</td><td>${fmt(c.end, c.yearly)}</td>
+      <td>${c.yearly ? "Todos los años" : "Sólo esa vez"}</td>
+      <td style="white-space:nowrap;text-align:right"><button class="btn small" data-cedit="${c.id}">Editar</button> <button class="btn small danger" data-cdel="${c.id}">Borrar</button></td></tr>`).join("")}
+    </tbody></table>` : `<div class="empty">No hay cierres cargados.</div>`;
+  const f = $("#closure-form");
+  $("#closures").onclick = async (e) => {
+    const ed = e.target.closest("[data-cedit]");
+    const del = e.target.closest("[data-cdel]");
+    if (ed) {
+      const c = list.find((x) => x.id === Number(ed.dataset.cedit));
+      f.elements.note.value = c.note; f.elements.start.value = c.start; f.elements.end.value = c.end; f.elements.yearly.checked = c.yearly;
+      f.dataset.id = c.id;
+      f.querySelector("button.primary").textContent = "Guardar cambios";
+      f.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    if (del) {
+      const c = list.find((x) => x.id === Number(del.dataset.cdel));
+      if (!(await UI.confirm("Borrar cierre", `¿Borrar el cierre <b>${UI.esc(c.note || "")}</b>? Los turnos ya armados no cambian hasta que los vuelvas a generar.`, "Borrar", true))) return;
+      await API.del(`/api/admin/closures/${c.id}`);
+      UI.toast("Cierre borrado");
+      afterClosuresChange();
+    }
+  };
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const body = { note: f.elements.note.value, start: f.elements.start.value, end: f.elements.end.value, yearly: f.elements.yearly.checked };
+    try {
+      if (f.dataset.id) await API.put(`/api/admin/closures/${f.dataset.id}`, body);
+      else await API.post("/api/admin/closures", body);
+      f.reset();
+      delete f.dataset.id;
+      f.querySelector("button.primary").textContent = "Agregar cierre";
+      UI.toast("Cierre guardado. Para que se apliquen a turnos ya armados, regenerá desde ese día.", 5000);
+      afterClosuresChange();
+    } catch (err) {
+      UI.toast(err.message, 4000);
+    }
+  };
+}
+
+function afterClosuresChange() {
+  renderClosures();
+  scheduleAnalyze();
+}
+
 // ============ configuración ============
 
 async function renderConfig() {
@@ -751,6 +966,7 @@ async function renderConfig() {
       UI.toast(err.message, 4000);
     }
   };
+  renderClosures();
   const users = await API.get("/api/admin/users");
   $("#user-form [name=employee_id]").innerHTML = `<option value="">(ninguno)</option>${A.empList.filter((e) => e.active).map((e) => `<option value="${e.id}">${UI.esc(e.name)}</option>`).join("")}`;
   $("#users").innerHTML = `<table class="grid"><tbody>${users.map((u) => `<tr><td><b>${UI.esc(u.username)}</b></td><td class="muted">${u.employee_name ? "Empleado: " + UI.esc(u.employee_name) : ""}</td><td style="text-align:right"><button class="btn small danger" data-deluser="${u.id}">Quitar</button></td></tr>`).join("")}</tbody></table>`;

@@ -52,9 +52,9 @@ def build_excel(weeks):
             _box(ws, r, 1, r, 7)
             # encabezados
             h = r + 1
-            for _, c1, c2, title in GROUPS:
+            for key, c1, c2, title in GROUPS:
                 ws.merge_cells(start_row=h, start_column=c1, end_row=h, end_column=c2)
-                cell = ws.cell(row=h, column=c1, value=title)
+                cell = ws.cell(row=h, column=c1, value=day.get("heads", {}).get(key, title))
                 cell.font = Font(name="Arial", size=11)
                 cell.alignment = Alignment(horizontal="center")
                 _box(ws, h, c1, h, c2)

@@ -27,6 +27,13 @@ DEFAULT_SETTINGS = {
 }
 
 
+# La estación cierra siempre Nochebuena y Fin de Año de 20:00 a 20:00 del día siguiente.
+DEFAULT_CLOSURES = [
+    ("2026-12-24T20:00", "2026-12-25T20:00", "Navidad"),
+    ("2026-12-31T20:00", "2027-01-01T20:00", "Año Nuevo"),
+]
+
+
 def connect(path=None):
     path = path or DB_PATH
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -42,6 +49,10 @@ def init_schema(conn):
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(assignments)")}
     if "note" not in cols:
         conn.execute("ALTER TABLE assignments ADD COLUMN note TEXT NOT NULL DEFAULT ''")
+    if not conn.execute("SELECT 1 FROM settings WHERE key = 'closures_seeded'").fetchone():
+        for start, end, note in DEFAULT_CLOSURES:
+            conn.execute("INSERT INTO closures(start, end, note, yearly) VALUES (?, ?, ?, 1)", (start, end, note))
+        conn.execute("INSERT INTO settings(key, value) VALUES ('closures_seeded', 'true')")
     ucols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
     if "employee_id" not in ucols:
         conn.execute("ALTER TABLE users ADD COLUMN employee_id INTEGER REFERENCES employees(id)")
@@ -112,7 +123,7 @@ def save_employee(conn, data, emp_id=None):
     if "positions" in data:
         conn.execute("DELETE FROM employee_positions WHERE employee_id = ?", (emp_id,))
         for pos, level in data["positions"].items():
-            if pos in ASSIGNABLE and level in ("principal", "suplente"):
+            if pos in ASSIGNABLE and level in ("principal", "suplente", "ocasional"):
                 conn.execute("INSERT INTO employee_positions(employee_id, position, level) VALUES (?, ?, ?)", (emp_id, pos, level))
     conn.commit()
     return emp_id
@@ -164,6 +175,12 @@ def set_month_status(conn, year, month, status=None):
 
 def published_months(conn):
     return {(r["year"], r["month"]) for r in conn.execute("SELECT year, month FROM months WHERE status = 'publicado'")}
+
+
+# ---------- cierres ----------
+
+def get_closures(conn):
+    return [{**dict(r), "yearly": bool(r["yearly"])} for r in conn.execute("SELECT * FROM closures ORDER BY substr(start, 6)")]
 
 
 # ---------- licencias ----------

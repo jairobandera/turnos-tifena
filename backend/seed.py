@@ -27,7 +27,7 @@ EMPLOYEES = {
     "Camilo": {"pistero": P},
     "Andres": {"pistero": P, "shop": S},
     "Belen": {"shop": P},
-    "Soledad": {"shop": P},
+    "Soledad": {"shop": P, "auxiliar": "ocasional"},  # a veces sale a limpieza (sólo con sugerencia)
     "Silvia": {"auxiliar": P},
     "Valeria": {"auxiliar": P},
     "Fabiana": {"auxiliar": P},

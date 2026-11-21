@@ -9,7 +9,7 @@ from datetime import timedelta
 from ortools.sat.python import cp_model
 
 from db import iso, parse_date, date_range, month_bounds, license_days
-from rules import NEXT_SHIFT, POS_NAME, SHIFT_NAME, fmt_day, libres_target
+from rules import NEXT_SHIFT, POS_NAME, SHIFT_NAME, fmt_day, libres_target, special_hours, closed_days
 
 SH = ["T3", "T1", "T2"]          # orden cronológico dentro del día
 HISTORY_DAYS = 14
@@ -29,6 +29,7 @@ W_LIBRES_SOBRAN = 30
 W_EXT = 35
 W_SUP = 8
 W_SWITCH_FIJO = 3
+W_KEEP = 25               # premio por dejar a alguien donde ya estaba (al rehacer cambia lo mínimo)
 W_LIBRES_EXCESO = 5000    # nadie puede tener más libres de los que le corresponden
 W_EXTRA = 6               # un refuerzo (persona de más) en mañana/tarde
 W_EXTRA_NOCHE = 45
@@ -38,7 +39,8 @@ EXTRA_CAP = {("T3", "pistero"): 1, ("*", "pistero"): 2, ("*", "auxiliar"): 1, ("
 
 
 
-def generate(year, month, employees, assignments, licenses, settings, desde=None, mode="completar", time_limit=None):
+def generate(year, month, employees, assignments, licenses, settings, desde=None, mode="completar", time_limit=None,
+             closures=()):
     """mode='completar': sólo llena días vacíos >= desde (los armados quedan fijos).
     mode='rehacer'  : rehace todos los días >= desde, manteniendo las asignaciones con candado."""
     first, last = month_bounds(year, month)
@@ -57,6 +59,7 @@ def generate(year, month, employees, assignments, licenses, settings, desde=None
         return {"ok": False, "msg": "No hay días vacíos para generar desde esa fecha."}
     free_set = set(free)
     locked = [a for a in assignments if a["date"] in free_set and (a["position"] == "otro" or (mode == "rehacer" and a.get("locked")))]
+    prefer = {(a["employee_id"], a["date"], a["shift"], a["position"]) for a in assignments if a["date"] in free_set}
 
     # el modelo ve siempre el mes completo (para contar bien los libres) + historial previo
     start = min(parse_date(free[0]) - timedelta(days=HISTORY_DAYS), first)
@@ -70,7 +73,11 @@ def generate(year, month, employees, assignments, licenses, settings, desde=None
     max_seg = int(settings.get("max_dias_seguidos", 6))
     time_limit = float(time_limit or settings.get("tiempo_generador", 25))
 
-    common = (days, free_set, by_day, lic, B, max_h4, target_libres, max_seg, month_days)
+    # cierres de la estación: turnos cerrados no llevan gente; días cerrados no cuentan como libres
+    special = special_hours(days[0], last, closures)
+    closed_shift = {(d, s) for d, v in special.items() for s, h in v.items() if h is None}
+    closed_d = closed_days(special)
+    common = (days, free_set, by_day, lic, B, max_h4, target_libres, max_seg, month_days, closed_shift, closed_d)
     phases = [True, False] if settings.get("cajeros_estrictos", True) else [False]
     result = None
     for strict in phases:
@@ -81,10 +88,10 @@ def generate(year, month, employees, assignments, licenses, settings, desde=None
         if cajeros:
             only_caj = {s: {"cajero": need["cajero"]} for s, need in staffing.items() if need.get("cajero")}
             locked_caj = [a for a in locked if a["employee_id"] in {e["id"] for e in cajeros}]
-            r1 = _solve(strict, cajeros, only_caj, locked_caj, *common, time_limit * 0.3, night_bonus=True)
+            r1 = _solve(strict, cajeros, only_caj, locked_caj, *common, time_limit * 0.3, night_bonus=True, prefer=prefer)
             if r1["ok"]:
                 forced += [a for a in r1["assignments"] if not a.get("locked")]
-        result = _solve(strict, emps, staffing, forced, *common, time_limit * 0.7)
+        result = _solve(strict, emps, staffing, forced, *common, time_limit * 0.7, prefer=prefer)
         if result["ok"]:
             result["estricto"] = strict
             break
@@ -99,7 +106,8 @@ def generate(year, month, employees, assignments, licenses, settings, desde=None
 
 
 def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h4,
-           target_libres, max_seg, month_days, time_limit, night_bonus=False):
+           target_libres, max_seg, month_days, closed_shift, closed_d, time_limit, night_bonus=False,
+           prefer=frozenset()):
     m = cp_model.CpModel()
     pen = []
     x = {}
@@ -138,15 +146,18 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
                     for p in ["cajero", "shop", "pistero", "auxiliar", "otro"]:
                         lvl = e["positions"].get(p)
                         is_locked = (eid, d, s, p) in locked_keys
-                        if onlic and not is_locked:
+                        if (onlic or (d, s) in closed_shift) and not is_locked:
                             continue
-                        if not is_locked and (lvl is None or staffing.get(s, {}).get(p, 0) == 0):
+                        # "ocasional" (ej. Soledad en limpieza) sólo si el encargado lo aplicó/fijó
+                        if not is_locked and (lvl in (None, "ocasional") or staffing.get(s, {}).get(p, 0) == 0):
                             continue
                         xv = m.NewBoolVar("")
                         x[ei, t, s, p] = xv
                         xs.append(xv)
                         if is_locked:
                             m.Add(xv == 1)
+                        if (eid, d, s, p) in prefer:
+                            pen.append((-W_KEEP, xv))
                         if lvl == "suplente":
                             pen.append((W_SUP_NOCHE if (s == "T3" and p == "cajero") else W_SUP, xv))
                     m.Add(wv[s] == sum(xs)) if xs else m.Add(wv[s] == 0)
@@ -239,8 +250,8 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
         # Los días del mes que no están armados (antes de "desde") no se cuentan.
         month_idx = [t for t, d in enumerate(days) if d in month_set]
         counted = [t for t in month_idx if days[t] in free_set or by_day.get(days[t])]
-        avail = [t for t in counted if days[t] not in lic_e]
-        target = libres_target(target_libres, len(avail), len(month_idx))
+        avail = [t for t in counted if days[t] not in lic_e and days[t] not in closed_d]
+        target = libres_target(target_libres, len(avail), len([t for t in month_idx if days[t] not in closed_d]))
         off_sum = sum(off[ei, t] for t in avail)
         under = m.NewIntVar(0, 62, "")
         m.Add(under >= target - off_sum)
@@ -262,7 +273,7 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
         for t, d in enumerate(days):
             week.append(t)
             if parse_date(d).weekday() == 6 or t == len(days) - 1:
-                tt = [k for k in week if days[k] in month_set and days[k] not in lic_e]
+                tt = [k for k in week if days[k] in month_set and days[k] not in lic_e and days[k] not in closed_d]
                 if len(tt) >= 5 and any(days[k] in free_set for k in tt):
                     z = m.NewBoolVar("")
                     m.Add(sum(off[ei, k] for k in tt) + z >= 1)
@@ -275,6 +286,8 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
         if d not in free_set:
             continue
         for s in SH:
+            if (d, s) in closed_shift:
+                continue
             for p, need in staffing.get(s, {}).items():
                 vars_ = [x[ei, t, s, p] for ei in range(len(emps)) if (ei, t, s, p) in x]
                 n_locked = sum(1 for k in locked_keys if k[1] == d and k[2] == s and k[3] == p)
