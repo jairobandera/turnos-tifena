@@ -20,7 +20,7 @@ from export_excel import build_excel
 from export_pdf import build_pdf
 
 FRONTEND = os.path.join(db.BASE_DIR, "frontend")
-HISTORY = 14
+HISTORY = 31   # el generador mira el mes anterior completo
 
 app = Flask(__name__, static_folder=FRONTEND, static_url_path="")
 

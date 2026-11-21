@@ -182,3 +182,27 @@ def test_ciclo_de_12_dias_de_los_cajeros(conn):
     cl = rules.expand_closures(db.get_closures(conn), f - timedelta(days=20), l + timedelta(days=1))
     an = rules.analyze(2026, 12, db.get_assignments(conn, f - timedelta(days=14), l), emps, lic, settings, cl)
     assert not [i for i in an["issues"] if "en medio de sus noches" in i["msg"]]
+
+
+def test_noches_de_pisteros_en_bloques_y_parejas(conn):
+    """Pisteros: noches en bloques de 4 seguidas y nadie repite muy seguido."""
+    from collections import Counter
+    emps, settings, lic = db.get_employees(conn), db.get_settings(conn), db.get_licenses(conn)
+    f, l = db.month_bounds(2026, 12)
+    cl = rules.expand_closures(db.get_closures(conn), f - timedelta(days=40), l + timedelta(days=1))
+    r = scheduler.generate(2026, 12, emps, db.get_assignments(conn, f - timedelta(days=35), l), lic, settings, closures=cl)
+    assert r["ok"]
+    noches = Counter(a["employee_id"] for a in r["assignments"] if a["shift"] == "T3" and a["position"] == "pistero")
+    assert max(noches.values()) <= 8, noches
+    names = {e["id"]: e["name"] for e in emps}
+    for eid in noches:
+        ds = sorted(a["date"] for a in r["assignments"] if a["employee_id"] == eid and a["shift"] == "T3")
+        runs, run = [], 1
+        for p, q in zip(ds, ds[1:]):
+            if (db.parse_date(q) - db.parse_date(p)).days == 1 or q == "2026-12-26" and p == "2026-12-24":
+                run += 1
+            else:
+                runs.append(run)
+                run = 1
+        runs.append(run)
+        assert all(x >= 2 for x in runs), (names[eid], ds)   # sin noches sueltas

@@ -12,13 +12,13 @@ from db import iso, parse_date, date_range, month_bounds, license_days
 from rules import NEXT_SHIFT, POS_NAME, SHIFT_NAME, fmt_day, libres_target, special_hours, closed_days, staffing_for
 
 SH = ["T3", "T1", "T2"]          # orden cronológico dentro del día
-HISTORY_DAYS = 14
+HISTORY_DAYS = 31          # se mira el mes anterior completo (rueda de noches, ciclos, horas de 4)
 
 # Pesos del objetivo (más alto = más importante evitar)
 W_UNFILLED = 10000
 W_H4_EXCESS = 20000       # el máximo de horas de 4 de la configuración se respeta sí o sí
 W_CAJERO_RULE = 400       # sólo si no se pudo cumplir estricto
-W_LIBRES_FALTAN = 1000
+W_LIBRES_FALTAN = 3000    # cada libre de menos (los 6 libres van antes que la rueda de noches)
 W_SEGUIDOS = 2000         # máximo de días seguidos de la configuración
 W_SEMANA_SIN_LIBRE = 80
 W_H4 = 60
@@ -34,6 +34,9 @@ W_LIBRES_EXCESO = 8000    # nadie puede tener más libres de los que le correspo
 OTROS_SERVICIOS = "Otros servicios"
 W_JORNAL = 40             # jornalero sin días fijos: cada día trabajado cuesta (sólo si hace falta)
 W_JORNAL_DESVIO = 250     # jornalero con días por mes (ej. Soledad 15): cada día de más o de menos
+W_NOCHE_RUEDA = 1500
+W_NOCHE_BLOQUE = 2500     # pisteros: noches en bloque de 4 seguidas
+      # pisteros: no volver a la noche hasta que hayan pasado los demás
 W_NOCHE_LIBRE = 3000      # nadie tiene libre en medio de sus noches (sólo a mano, si alguien lo pide)
 W_FASE_HIST = 500         # el ciclo de cada cajero sale de lo que ya trabajó (historial)
 CICLO = 12                # cajeros: 4 noches + 4 días de tarde + 4 días de mañana (días de calendario)
@@ -147,6 +150,19 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
     locked_keys = {}
     for a in locked:
         locked_keys[(a["employee_id"], a["date"], a["shift"], a["position"])] = a
+
+    # Rueda de noches de los pisteros: cada uno hace su bloque y no vuelve hasta que pasen todos.
+    # En cualquier ventana de (bloque x cantidad de pisteros) días, nadie hace más de un bloque de noches.
+    def night_pistero(e):
+        """Pisteros que hacen noches: van en bloques de 4 seguidas."""
+        return (e["positions"].get("pistero") in ("principal", "suplente") and "T3" in (e.get("shifts") or SH)
+                and not e.get("jornalero") and not e.get("fuera") and e["positions"].get("cajero") != "principal")
+
+    def in_rueda(e):
+        """La rueda la hacen los pisteros que no son suplentes de cajero (esos quedan para cubrir cajeros)."""
+        return night_pistero(e) and "cajero" not in e["positions"]
+    night_pool = [e for e in emps if in_rueda(e)] if not night_bonus else []
+    rueda = B * len(night_pool)
 
     for ei, e in enumerate(emps):
         eid = e["id"]
@@ -328,6 +344,39 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
                 for k, mm in mismatches.items():
                     if mm > best:
                         m.Add(z[k] == 0)
+
+        # --- rueda de noches (pisteros) ---
+        if night_pistero(e) and not night_bonus:
+            # las noches van en bloque de 4 seguidas: si empieza una noche, siguen 3 más (los cierres cuentan)
+            for t in range(len(days)):
+                if days[t] not in free_set:
+                    continue
+                n_t = ws[ei, t, "T3"]
+                prev = ws[ei, t - 1, "T3"] if t > 0 else 0
+                start = m.NewBoolVar("")
+                m.Add(start >= n_t - prev)
+                for k in range(1, B):
+                    if t + k >= len(days):
+                        break
+                    dk = days[t + k]
+                    if (dk, "T3") in closed_shift or dk in lic_e:
+                        continue
+                    short = m.NewBoolVar("")
+                    m.Add(short >= start - ws[ei, t + k, "T3"])
+                    pen.append((W_NOCHE_BLOQUE, short))
+                if t + B < len(days):
+                    five = m.NewBoolVar("")
+                    m.Add(five >= sum(ws[ei, t + k, "T3"] for k in range(B + 1)) - B)
+                    pen.append((W_NOCHE_BLOQUE // 2, five))
+        if rueda and night_pistero(e) and rueda <= len(days):
+            for t_end in range(rueda - 1, len(days)):
+                if days[t_end] not in free_set:
+                    continue
+                win = range(t_end - rueda + 1, t_end + 1)
+                extra_n = m.NewIntVar(0, rueda, "")
+                m.Add(extra_n >= sum(ws[ei, k, "T3"] for k in win) - B)
+                # la reserva (suplentes de cajero) también se empareja, pero con menos peso que los libres
+                pen.append((W_NOCHE_RUEDA if in_rueda(e) else W_NOCHE_RUEDA // 5, extra_n))
 
         # --- descansos y horas de 4 ---
         h4_terms = []
