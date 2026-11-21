@@ -155,3 +155,30 @@ def test_auxiliares_fabiana_cubre_libres(diciembre):
     assert rep["Fabiana"]["jornalero"]
     assert rep["Silvia"]["libres"] == rep["Silvia"]["libres_objetivo"]
     assert rep["Valeria"]["libres"] == rep["Valeria"]["libres_objetivo"]
+
+
+def test_ciclo_de_12_dias_de_los_cajeros(conn):
+    """Bloques de 4 días de calendario: Jairo mañana 28/11-01/12 y noche desde el 02/12; noches siempre de un titular."""
+    emps, settings, lic = db.get_employees(conn), db.get_settings(conn), db.get_licenses(conn)
+    for y, m, desde in [(2026, 11, "2026-11-30"), (2026, 12, None)]:
+        f, l = db.month_bounds(y, m)
+        cl = rules.expand_closures(db.get_closures(conn), f - timedelta(days=20), l + timedelta(days=1))
+        r = scheduler.generate(y, m, emps, db.get_assignments(conn, f - timedelta(days=20), l), lic, settings,
+                               desde=desde, closures=cl)
+        db.replace_assignments(conn, f, l, r["assignments"])
+    A = db.get_assignments(conn, "2026-11-28", "2026-12-31")
+    ids = {e["name"]: e["id"] for e in emps}
+    jairo = {a["date"]: a["shift"] for a in A if a["employee_id"] == ids["Jairo"]}
+    assert all(jairo.get(d) in (None, "T1") for d in ["2026-11-28", "2026-11-29", "2026-11-30", "2026-12-01"])
+    assert all(jairo.get(d) == "T3" for d in ["2026-12-02", "2026-12-03", "2026-12-04", "2026-12-05"])
+    titulares = {ids["Jairo"], ids["Guillermo"], ids["Fabricio"]}
+    for d in db.date_range("2026-12-01", "2026-12-31"):
+        ds = d.isoformat()
+        if ds == "2026-12-25":
+            continue   # estación cerrada
+        assert any(a["date"] == ds and a["shift"] == "T3" and a["employee_id"] in titulares for a in A), ds
+    # nadie con libre en medio de sus noches
+    f, l = db.month_bounds(2026, 12)
+    cl = rules.expand_closures(db.get_closures(conn), f - timedelta(days=20), l + timedelta(days=1))
+    an = rules.analyze(2026, 12, db.get_assignments(conn, f - timedelta(days=14), l), emps, lic, settings, cl)
+    assert not [i for i in an["issues"] if "en medio de sus noches" in i["msg"]]

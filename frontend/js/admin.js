@@ -938,7 +938,7 @@ function renderEmployees() {
       <option value="ocasional" ${v === "ocasional" ? "selected" : ""}>Ocasional</option></select>`;
   };
   const row = (e) => `<tr data-id="${e ? e.id : ""}" ${e && !e.active ? 'style="opacity:.55"' : ""}>
-      <td><input class="input" data-name value="${e ? UI.esc(e.name) : ""}" placeholder="Nombre" style="min-width:120px"></td>
+      <td><input class="input" data-name value="${e ? UI.esc(e.name) : ""}" placeholder="Nombre" style="width:96px;min-width:0;padding:6px 8px"></td>
       ${POSITIONS.map((p) => `<td>${sel(e, p)}</td>`).join("")}
       <td class="num"><input type="checkbox" data-enc ${e && e.positions[TASK] ? "checked" : ""} style="width:20px;height:20px" title="Encargado: puede asignarse otras tareas"></td>
       <td style="white-space:nowrap">${SHIFTS.map((s) => `<label title="${s.name}" style="margin-right:6px;font-size:13px"><input type="checkbox" data-shift="${s.key}" ${!e || (e.shifts || []).includes(s.key) ? "checked" : ""}> ${s.name[0]}</label>`).join("")}</td>

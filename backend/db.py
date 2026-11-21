@@ -1,4 +1,4 @@
-"""Acceso a SQLite y helpers de lectura/escritura compartidos por la API y el generador."""
+﻿"""Acceso a SQLite y helpers de lectura/escritura compartidos por la API y el generador."""
 import json
 import os
 import sqlite3
@@ -18,7 +18,7 @@ DEFAULT_SETTINGS = {
     "bloque": 4,
     "cajeros_estrictos": True,
     "max_dias_seguidos": 6,
-    "tiempo_generador": 25,
+    "tiempo_generador": 45,
     "encargado_fuera": False,   # el encargado no entra en la planilla: queda en "Otros servicios"
     "staffing": {
         "T3": {"cajero": 1, "pistero": 1},

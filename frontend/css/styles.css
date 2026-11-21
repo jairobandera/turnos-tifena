@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   --bg: #eef1f5;
   --paper: #ffffff;
   --ink: #15191f;
@@ -263,3 +263,11 @@ table.grid th.sticky { background: #f6f7f9; z-index: 2; }
   main { padding: 0; }
   .day { box-shadow: none; break-inside: avoid; }
 }
+
+/* tabla de empleados compacta */
+#emp-table table.grid th, #emp-table table.grid td { padding: 6px 4px; }
+#emp-table .input { min-height: 32px; padding: 4px 6px; font-size: 13px; }
+#emp-table select.input { width: 84px; }
+#emp-table [data-jdias] { width: 56px !important; }
+#emp-table th { font-size: 11px; }
+

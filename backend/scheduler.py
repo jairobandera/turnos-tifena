@@ -34,6 +34,9 @@ W_LIBRES_EXCESO = 8000    # nadie puede tener más libres de los que le correspo
 OTROS_SERVICIOS = "Otros servicios"
 W_JORNAL = 40             # jornalero sin días fijos: cada día trabajado cuesta (sólo si hace falta)
 W_JORNAL_DESVIO = 250     # jornalero con días por mes (ej. Soledad 15): cada día de más o de menos
+W_NOCHE_LIBRE = 3000      # nadie tiene libre en medio de sus noches (sólo a mano, si alguien lo pide)
+W_FASE_HIST = 500         # el ciclo de cada cajero sale de lo que ya trabajó (historial)
+CICLO = 12                # cajeros: 4 noches + 4 días de tarde + 4 días de mañana (días de calendario)
 W_OTROS = 30              # encargado en "Otros servicios" cuando sobra gente (así nadie pasa de 6 libres)
 # Sin refuerzos automáticos: cada turno lleva exactamente su dotación. Los pisteros extra
 # sólo existen en los días especiales que carga el encargado.
@@ -152,6 +155,10 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
         jornal_dias = int(e.get("jornal_dias") or 0)
         rot = ("cajero" in e["positions"] or "pistero" in e["positions"]) and not fuera
         caj_principal = e["positions"].get("cajero") == "principal"
+        # Cajeros titulares: ciclo fijo de calendario de 12 días. 4 noches seguidas (sin libres),
+        # 4 días de tarde y 4 de mañana (los libres caen ahí); el día 4 de la mañana a las 22:00 entra la noche.
+        phase_mode = caj_principal and strict and not fuera
+        rot = rot and not phase_mode
         jornalero = bool(e.get("jornalero"))
         allowed = set(e.get("shifts") or SH)   # turnos que puede hacer (ej. Belén sólo la mañana)
         fuera_shift = "T1" if "T1" in allowed else next(s for s in SH if s in allowed)
@@ -243,6 +250,7 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
             switch = m.NewBoolVar("")
             m.Add(switch + same == work)
 
+            prevfull_before = prevfull
             if rot:
                 c = m.NewIntVar(0, B, "")
                 m.Add(c == prevc).OnlyEnforceIf(o)
@@ -271,9 +279,55 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
                     else:
                         pen += [(W_EARLY, early), (W_WRONG_ORDER, wrong), (W_EXT, ext)]
                 prevc, prevfull = c, full
-            elif is_free:
+            elif is_free and not phase_mode:
                 pen.append((W_SWITCH_FIJO, switch))
+            if rot and is_free:
+                # en la noche nadie tiene libre: libre después de una noche sin haber completado el bloque
+                gap = m.NewBoolVar("")
+                m.Add(gap >= o + prevL[SH.index("T3")] + (1 - prevfull_before) - 2)
+                pen.append((W_NOCHE_LIBRE, gap))
             prevL = L
+
+        # --- ciclo de calendario de los cajeros titulares ---
+        if phase_mode:
+            z = [m.NewBoolVar("") for _ in range(CICLO)]
+            m.AddExactlyOne(z)
+            mismatches, observed = {}, 0
+            for k in range(CICLO):
+                mismatch = 0
+                for t, d in enumerate(days):
+                    blk = ((k + t) % CICLO) // B      # 0 = noche, 1 = tarde, 2 = mañana
+                    if d in free_set:
+                        if blk == 0:
+                            if d in lic_e or (d, "T3") in closed_shift:
+                                m.Add(ws[ei, t, "T1"] + ws[ei, t, "T2"] == 0).OnlyEnforceIf(z[k])
+                            else:
+                                m.Add(ws[ei, t, "T3"] == 1).OnlyEnforceIf(z[k])
+                        elif blk == 1:
+                            m.Add(ws[ei, t, "T1"] + ws[ei, t, "T3"] == 0).OnlyEnforceIf(z[k])
+                        else:
+                            m.Add(ws[ei, t, "T2"] + ws[ei, t, "T3"] == 0).OnlyEnforceIf(z[k])
+                    elif by_day.get(d):
+                        # día ya armado: ¿coincide con esta fase?
+                        sh = {a["shift"] for a in by_day[d] if a["employee_id"] == eid}
+                        if blk == 0:
+                            bad = "T3" not in sh and d not in lic_e and (d, "T3") not in closed_shift
+                        elif blk == 1:
+                            bad = bool(sh & {"T1", "T3"})
+                        else:
+                            bad = bool(sh & {"T2", "T3"})
+                        mismatch += 1 if bad else 0
+                        if k == 0 and sh:
+                            observed += 1
+                mismatches[k] = mismatch
+                if mismatch:
+                    pen.append((W_FASE_HIST * mismatch, z[k]))
+            if observed >= B:
+                # lo ya armado define el ciclo: se sigue sí o sí desde ahí (no se corre por un cierre o un libre)
+                best = min(mismatches.values())
+                for k, mm in mismatches.items():
+                    if mm > best:
+                        m.Add(z[k] == 0)
 
         # --- descansos y horas de 4 ---
         h4_terms = []

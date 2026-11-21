@@ -495,21 +495,39 @@ def analyze(year, month, assignments, employees, licenses, settings, closures=()
                     seq.append((t[2], t[3]))
                 else:
                     seq[-1] = (t[2], t[3])
+            # bloques de 4 días de calendario: los libres caen dentro de tarde y mañana; las noches van seguidas
             blocks = shift_blocks(seq)
             for i, b in enumerate(blocks):
                 if b["days"][-1] < m_start:
                     continue
                 first_block = i == 0
                 last_block = i == len(blocks) - 1
-                n = len(b["days"])
-                if n > bloque:
-                    issue("warn", f"{emp['name']}: {n} {SHIFT_NAME[b['shift']].lower()}s seguidas (bloque de {bloque})", date=b["days"][bloque], employee_id=eid)
-                elif n < bloque and not first_block and not last_block:
-                    issue("warn", f"{emp['name']}: sólo {n} {SHIFT_NAME[b['shift']].lower()}(s) antes de cambiar de turno (deben ser {bloque})", date=b["days"][-1], employee_id=eid)
+                # los días con la estación cerrada no cuentan dentro del bloque
+                span_days = [iso(x) for x in date_range(b["days"][0], b["days"][-1])]
+                span = len([x for x in span_days if x not in closed])
+                name_s = SHIFT_NAME[b["shift"]].lower()
+                around = [iso(parse_date(b["days"][0]) - timedelta(days=1)), iso(parse_date(b["days"][-1]) + timedelta(days=1))]
+                cut = any(special.get(x, {}).get("T3", "") is None or x in lic_days for x in around)
+                if span > bloque:
+                    issue("warn", f"{emp['name']}: {len(b['days'])} {name_s}s en {span} días (el bloque es de {bloque} días)",
+                          date=b["days"][-1], employee_id=eid)
+                closed_nights = sum(1 for x in span_days if special.get(x, {}).get("T3", "") is None)
+                if b["shift"] == "T3" and len(b["days"]) + closed_nights >= bloque:
+                    pass   # la noche de cierre (25/12, 01/01) cuenta dentro del bloque
+                elif b["shift"] == "T3" and len(b["days"]) < bloque and not first_block and not last_block and not cut:
+                    issue("warn", f"{emp['name']}: sólo {len(b['days'])} noche(s) (son {bloque} seguidas)", date=b["days"][-1], employee_id=eid)
                 if not first_block:
                     prev = blocks[i - 1]["shift"]
                     if NEXT_SHIFT[prev] != b["shift"] and b["days"][0] >= m_start:
                         issue("warn", f"{emp['name']}: pasa de {SHIFT_NAME[prev]} a {SHIFT_NAME[b['shift']]} (le toca {SHIFT_NAME[NEXT_SHIFT[prev]]})", date=b["days"][0], employee_id=eid)
+
+        # en la noche nadie tiene libre: noche, libre, noche
+        nights = {t[2] for t in tl if t[3] == "T3"}
+        for d in month_days:
+            prev_d, next_d = iso(parse_date(d) - timedelta(days=1)), iso(parse_date(d) + timedelta(days=1))
+            if (d not in worked_days and d not in lic_days and d not in closed
+                    and prev_d in nights and next_d in nights):
+                issue("warn", f"{emp['name']}: libre en medio de sus noches", date=d, employee_id=eid)
 
         if len(h4_dates) > max_h4:
             issue("warn", f"{emp['name']}: {len(h4_dates)} horas de 4 en el mes (máximo {max_h4})", employee_id=eid)

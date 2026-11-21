@@ -45,6 +45,8 @@ Desde el celular en el mismo wifi: `http://IP-DE-LA-PC:5000`.
 | Turno 1 (Mañana) | 06:00 a 14:00 | |
 | Turno 2 (Tarde) | 14:00 a 22:00 | |
 
+**Rotación**: cajeros titulares en ciclo fijo de 12 días de calendario: 4 noches seguidas (sin libres), 4 días de tarde y 4 de mañana (los libres caen en tarde y mañana); el día 4 de la mañana a las 22:00 entra la noche. Así cada noche la cubre siempre un titular. Nadie tiene libre en medio de sus noches (sólo a mano).
+
 *Hora de 4* = sólo 8 h de descanso entre turnos: Tarde → Mañana, Mañana → Noche siguiente o
 Noche → Tarde el mismo día (este último nunca lo usa el generador). Todo se ajusta en **Configuración**.
 
