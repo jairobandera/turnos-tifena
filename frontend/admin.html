@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f4c81">
+  <title>Turnos Tifena · Encargado</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛽</text></svg>">
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo">TURNOS <span>TIFENA</span></div>
+    <div class="spacer"></div>
+    <a href="/" title="Vista de empleados" style="white-space:nowrap">Vista pública</a>
+    <span id="user" class="hide-mobile" style="opacity:.8;font-size:14px"></span>
+    <button class="linkbtn" id="logout" hidden>Salir</button>
+  </header>
+
+  <!-- login -->
+  <section id="login" class="login card" hidden>
+    <h2>Ingreso del encargado</h2>
+    <form id="login-form">
+      <label class="field">Usuario<input name="username" autocomplete="username" required autocapitalize="none"></label>
+      <label class="field">Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
+      <div id="login-err" class="alert error" hidden></div>
+      <button class="btn primary" style="width:100%">Ingresar</button>
+    </form>
+  </section>
+
+  <div id="app" hidden>
+    <nav class="tabs" id="tabs">
+      <button data-tab="turnos" class="active">Turnos</button>
+      <button data-tab="reporte">Reporte</button>
+      <button data-tab="licencias">Licencias</button>
+      <button data-tab="empleados">Empleados</button>
+      <button data-tab="config">Configuración</button>
+    </nav>
+
+    <main>
+      <!-- TURNOS -->
+      <section id="tab-turnos">
+        <div class="toolbar">
+          <div class="navdate">
+            <button class="btn" id="m-prev" aria-label="Mes anterior">‹</button>
+            <div class="label" id="m-label"></div>
+            <button class="btn" id="m-next" aria-label="Mes siguiente">›</button>
+          </div>
+          <span id="m-status" class="badge"></span>
+          <span id="m-dirty" class="badge dirty" hidden>Cambios sin guardar</span>
+          <div class="grow"></div>
+          <select class="input" id="hl" aria-label="Resaltar empleado"><option value="">Resaltar empleado…</option></select>
+        </div>
+        <div class="actionbar fixed-mobile toolbar">
+          <button class="btn accent" id="b-generate">⚙️ Generar</button>
+          <button class="btn primary" id="b-save">💾 Guardar</button>
+          <button class="btn" id="b-publish">📢 Publicar</button>
+          <button class="btn" id="b-undo" disabled>↶ Deshacer</button>
+          <button class="btn" id="b-export">📤 Exportar</button>
+        </div>
+        <div class="alerts" id="m-alerts"></div>
+        <div class="week-tabs" id="weeks"></div>
+        <div id="days" class="editable"></div>
+      </section>
+
+      <!-- REPORTE -->
+      <section id="tab-reporte" hidden>
+        <div class="alert info">Reporte privado para el encargado: no se exporta en el Excel ni en el PDF.</div>
+        <div id="report"></div>
+      </section>
+
+      <!-- LICENCIAS -->
+      <section id="tab-licencias" hidden>
+        <div class="card">
+          <h3 id="lic-form-title">Registrar licencia</h3>
+          <form id="lic-form" class="form-grid">
+            <label class="field">Empleado<select name="employee_id" required></select></label>
+            <label class="field">Sale el<input type="date" name="start" required></label>
+            <label class="field">Vuelve a trabajar (último día de licencia)<input type="date" name="end" required></label>
+            <label class="field">Tipo<select name="kind">
+              <option>Licencia</option><option>Vacaciones</option><option>Certificado médico</option><option>Estudio</option><option>Otro</option>
+            </select></label>
+            <label class="field wide">Nota<input name="note" placeholder="Opcional"></label>
+            <div class="actionbar" style="align-items:flex-end">
+              <button class="btn primary">Guardar licencia</button>
+              <button type="button" class="btn" id="lic-cancel" hidden>Cancelar edición</button>
+            </div>
+          </form>
+        </div>
+        <div class="toolbar">
+          <select class="input" id="lic-emp"><option value="">Todos los empleados</option></select>
+          <div class="seg" id="lic-filter"><button data-f="current" class="active">Vigentes y próximas</button><button data-f="all">Historial completo</button></div>
+        </div>
+        <div class="card"><div class="table-wrap" id="lic-table"></div></div>
+      </section>
+
+      <!-- EMPLEADOS -->
+      <section id="tab-empleados" hidden>
+        <div class="card">
+          <h3>Empleados y puestos</h3>
+          <p class="muted" style="margin-top:0">Principal = su puesto habitual. Suplente = lo cubre cuando falta alguien. El generador usa primero a los principales. <b>Encargado</b>: puede asignarse a sí mismo "Otras tareas" (corte de pasto, mantenimiento…); ese turno trabaja pero no ocupa puesto. Tiene que estar vinculado a su usuario en Configuración.</p>
+          <div class="table-wrap" id="emp-table"></div>
+        </div>
+      </section>
+
+      <!-- CONFIG -->
+      <section id="tab-config" hidden>
+        <div id="pwd-alert"></div>
+        <div class="card">
+          <h3>Reglas del generador</h3>
+          <form id="cfg-form">
+            <div class="form-grid">
+              <label class="field">Máximo de horas de 4 por mes (por empleado)<input type="number" min="0" name="max_horas4"></label>
+              <label class="field">Libres por mes<input type="number" min="0" name="libres_objetivo"></label>
+              <label class="field">Días por bloque de turno<input type="number" min="1" name="bloque"></label>
+              <label class="field">Máximo de días seguidos sin libre<input type="number" min="1" name="max_dias_seguidos"></label>
+              <label class="field">Tiempo máximo del generador (segundos)<input type="number" min="5" max="120" name="tiempo_generador"></label>
+              <label class="field wide" style="flex-direction:row;align-items:center;gap:8px;color:var(--ink)"><input type="checkbox" name="cajeros_estrictos" style="width:20px;height:20px"> Cajeros principales sí o sí en bloques completos (Mañana → Noche → Tarde)</label>
+            </div>
+            <h3 style="margin-top:16px">Dotación por turno</h3>
+            <div class="table-wrap" id="staffing"></div>
+            <div class="actionbar" style="margin-top:12px"><button class="btn primary">Guardar configuración</button></div>
+          </form>
+        </div>
+        <div class="card">
+          <h3>Administradores</h3>
+          <div id="users"></div>
+          <form id="user-form" class="form-grid" style="margin-top:10px">
+            <label class="field">Nuevo usuario<input name="username" required autocapitalize="none"></label>
+            <label class="field">Contraseña inicial<input name="password" type="text" required minlength="4"></label>
+            <label class="field">Es el empleado<select name="employee_id"></select></label>
+            <div class="actionbar" style="align-items:flex-end"><button class="btn">Agregar administrador</button></div>
+          </form>
+        </div>
+        <div class="card">
+          <h3>Cambiar mi contraseña</h3>
+          <form id="pwd-form" class="form-grid">
+            <label class="field">Contraseña actual<input name="current" type="password" required autocomplete="current-password"></label>
+            <label class="field">Nueva contraseña<input name="new" type="password" required minlength="6" autocomplete="new-password"></label>
+            <div class="actionbar" style="align-items:flex-end"><button class="btn primary">Cambiar</button></div>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/render.js"></script>
+  <script src="/js/admin.js"></script>
+</body>
+</html>

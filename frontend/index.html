@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f4c81">
+  <title>Turnos Tifena</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛽</text></svg>">
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo">TURNOS <span>TIFENA</span></div>
+    <div class="spacer"></div>
+    <a href="/admin">Ingreso encargado</a>
+  </header>
+  <nav class="tabs" id="tabs">
+    <button data-tab="turnos" class="active">Turnos</button>
+    <button data-tab="licencias">Licencias</button>
+  </nav>
+
+  <main>
+    <section id="tab-turnos">
+      <div class="toolbar">
+        <div class="seg" id="mode">
+          <button data-mode="week" class="active">Semana</button>
+          <button data-mode="month">Mes</button>
+        </div>
+        <div class="navdate">
+          <button class="btn" id="prev" aria-label="Anterior">‹</button>
+          <div class="label" id="range-label"></div>
+          <button class="btn" id="next" aria-label="Siguiente">›</button>
+        </div>
+        <button class="btn" id="today">Hoy</button>
+        <div class="grow hide-mobile"></div>
+        <select class="input" id="who" aria-label="¿Quién sos?"><option value="">¿Quién sos? (resaltar mi nombre)</option></select>
+        <div class="seg" id="view" hidden>
+          <button data-view="all" class="active">Planilla</button>
+          <button data-view="mine">Solo mis días</button>
+        </div>
+      </div>
+      <div id="content"></div>
+    </section>
+
+    <section id="tab-licencias" hidden>
+      <div class="toolbar">
+        <div class="seg" id="lic-filter">
+          <button data-f="current" class="active">Vigentes y próximas</button>
+          <button data-f="all">Todas</button>
+        </div>
+      </div>
+      <div class="card"><div class="table-wrap" id="lic-table"></div></div>
+    </section>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/render.js"></script>
+  <script src="/js/public.js"></script>
+</body>
+</html>
