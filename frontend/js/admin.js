@@ -202,6 +202,7 @@ function renderTurnos(keepScroll) {
   const ctx = { emps: A.emps, staffing: A.settings.staffing, licDays: A.licDays, editable: true, highlight: A.highlight, issues,
     suggestions: (A.analysis && A.analysis.suggestions) || [],
     special: (A.analysis && A.analysis.special) || {},
+    extra: (A.analysis && A.analysis.extra) || {},
     canTask: A.me && canTask(A.me.employee_id) };
   $("#days").innerHTML = days.map((d) => renderDay(d, byDay.get(d) || [], ctx)).join("");
   initSortables();
@@ -290,7 +291,8 @@ function pickEmployee(date, shift, pos, replaceIdx = null) {
     else groups[e.positions[pos] || "otro"].push(e);
   }
   const opt = (e, extra = "", disabled = false) => {
-    const hint = restHint(e.id, date, shift);
+    const hint = restHint(e.id, date, shift)
+      || ((e.shifts || []).includes(shift) ? "" : `⚠️ no hace la ${SHIFT_BY_KEY[shift].name.toLowerCase()}`);
     return `<button class="opt" data-emp="${e.id}" ${disabled ? "disabled" : ""}><span>${UI.esc(e.name)}</span><small>${[extra, hint].filter(Boolean).join(" · ")}</small></button>`;
   };
   const sec = (title, list, fn) => (list.length ? `<div class="group-title">${title}</div>${list.map(fn).join("")}` : "");
@@ -630,7 +632,7 @@ function showPreview(fromDate, r, label) {
   const byDay = new Map();
   for (const x of r.assignments) { if (!byDay.has(x.date)) byDay.set(x.date, []); byDay.get(x.date).push(x); }
   const ctx = { emps: A.emps, staffing: A.settings.staffing, licDays: A.licDays, editable: false, highlight: A.highlight, changed,
-    special: r.analysis.special || {} };
+    special: r.analysis.special || {}, extra: r.analysis.extra || {} };
   const [, last] = D.monthBounds(A.year, A.month);
   const html = `<h3>🔎 Simulación</h3>
     <div class="sub">${UI.esc(label)}. Se reacomodarían los turnos del <b>${D.dm(D.parse(fromDate))} al ${D.dm(last)}</b>:
@@ -830,7 +832,7 @@ function renderReport() {
   const head = weeks.map((w) => `<th class="num">${D.dm(D.parse(w.start))}–${D.dm(D.parse(w.end))}<br><small>Libres · H4</small></th>`).join("");
   const rows = rep.map((r) => `<tr>
       <td class="sticky"><b>${UI.esc(r.name)}</b></td>
-      <td class="num"><span class="${clsLib(r)}">${r.libres}</span> / ${r.libres_objetivo}</td>
+      <td class="num">${r.jornalero ? `<span class="muted">Jornalero · ${r.trabajados} días${r.jornal_dias ? ` (objetivo ${r.jornal_dias})` : ""}</span>` : `<span class="${clsLib(r)}">${r.libres}</span> / ${r.libres_objetivo}`}</td>
       <td class="num"><span class="${clsH4(r.horas4, r.max_horas4)}">${r.horas4}</span> / ${r.max_horas4}</td>
       <td class="num">${r.licencia || ""}</td>
       <td class="num">${r.turnos.T1}</td><td class="num">${r.turnos.T2}</td><td class="num">${r.turnos.T3}</td>
@@ -939,9 +941,12 @@ function renderEmployees() {
       <td><input class="input" data-name value="${e ? UI.esc(e.name) : ""}" placeholder="Nombre" style="min-width:120px"></td>
       ${POSITIONS.map((p) => `<td>${sel(e, p)}</td>`).join("")}
       <td class="num"><input type="checkbox" data-enc ${e && e.positions[TASK] ? "checked" : ""} style="width:20px;height:20px" title="Encargado: puede asignarse otras tareas"></td>
+      <td style="white-space:nowrap">${SHIFTS.map((s) => `<label title="${s.name}" style="margin-right:6px;font-size:13px"><input type="checkbox" data-shift="${s.key}" ${!e || (e.shifts || []).includes(s.key) ? "checked" : ""}> ${s.name[0]}</label>`).join("")}</td>
+      <td style="white-space:nowrap"><input type="checkbox" data-jornal ${e && e.jornalero ? "checked" : ""} style="width:20px;height:20px;vertical-align:middle" title="Jornalero: cubre a los demás, sin tope de libres">
+        <input class="input" type="number" min="0" max="31" data-jdias value="${e && e.jornal_dias ? e.jornal_dias : ""}" placeholder="días" title="Días por mes (vacío = sólo lo necesario)" style="width:72px;min-height:32px;padding:4px 6px"></td>
       <td class="num"><input type="checkbox" data-active ${!e || e.active ? "checked" : ""} style="width:20px;height:20px"></td>
       <td><button class="btn small primary" data-save>${e ? "Guardar" : "Agregar"}</button></td></tr>`;
-  $("#emp-table").innerHTML = `<table class="grid"><thead><tr><th>Nombre</th>${POSITIONS.map((p) => `<th>${POS_NAME[p]}</th>`).join("")}<th class="num">Encargado</th><th class="num">Activo</th><th></th></tr></thead>
+  $("#emp-table").innerHTML = `<table class="grid"><thead><tr><th>Nombre</th>${POSITIONS.map((p) => `<th>${POS_NAME[p]}</th>`).join("")}<th class="num">Encargado</th><th>Turnos<br><small>N · M · T</small></th><th>Jornalero<br><small>días/mes</small></th><th class="num">Activo</th><th></th></tr></thead>
     <tbody>${A.empList.map(row).join("")}${row(null)}</tbody></table>`;
   $("#emp-table").onclick = async (ev) => {
     const b = ev.target.closest("[data-save]");
@@ -950,7 +955,10 @@ function renderEmployees() {
     const positions = {};
     $$("select[data-pos]", tr).forEach((s) => { if (s.value) positions[s.dataset.pos] = s.value; });
     if ($("[data-enc]", tr).checked) positions[TASK] = "principal";
-    const body = { name: $("[data-name]", tr).value.trim(), active: $("[data-active]", tr).checked, positions };
+    const shifts = $$("[data-shift]", tr).filter((c) => c.checked).map((c) => c.dataset.shift);
+    if (!shifts.length) return UI.toast("Tiene que poder hacer al menos un turno", 4000);
+    const body = { name: $("[data-name]", tr).value.trim(), active: $("[data-active]", tr).checked, positions,
+      shifts, jornalero: $("[data-jornal]", tr).checked, jornal_dias: Number($("[data-jdias]", tr).value || 0) };
     try {
       if (tr.dataset.id) await API.put(`/api/admin/employees/${tr.dataset.id}`, body);
       else await API.post("/api/admin/employees", body);
@@ -1010,6 +1018,54 @@ async function renderClosures() {
   };
 }
 
+async function renderSpecialDays() {
+  const list = await API.get("/api/admin/special-days");
+  const fmt = (r) => `${D.dm(D.parse(r.date))}${r.yearly ? "" : "/" + r.date.slice(0, 4)}`;
+  $("#specials").innerHTML = list.length ? `<table class="grid"><thead><tr><th>Motivo</th><th>Fecha</th><th>Turno</th><th class="num">Pisteros extra</th><th>Repite</th><th></th></tr></thead><tbody>
+    ${list.map((r) => `<tr><td><b>${UI.esc(r.note || "Día especial")}</b></td><td>${fmt(r)}</td><td>${SHIFT_BY_KEY[r.shift].name}</td>
+      <td class="num">+${r.extra_pisteros}</td><td>${r.yearly ? "Todos los años" : "Sólo esa vez"}</td>
+      <td style="white-space:nowrap;text-align:right"><button class="btn small" data-sedit="${r.id}">Editar</button> <button class="btn small danger" data-sdel="${r.id}">Borrar</button></td></tr>`).join("")}
+    </tbody></table>` : `<div class="empty">No hay días especiales cargados.</div>`;
+  const f = $("#special-form");
+  $("#specials").onclick = async (e) => {
+    const ed = e.target.closest("[data-sedit]");
+    const del = e.target.closest("[data-sdel]");
+    if (ed) {
+      const r = list.find((x) => x.id === Number(ed.dataset.sedit));
+      f.elements.note.value = r.note; f.elements.date.value = r.date; f.elements.shift.value = r.shift;
+      f.elements.extra_pisteros.value = r.extra_pisteros; f.elements.yearly.checked = r.yearly;
+      f.dataset.id = r.id;
+      f.querySelector("button.primary").textContent = "Guardar cambios";
+      f.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    if (del) {
+      const r = list.find((x) => x.id === Number(del.dataset.sdel));
+      if (!(await UI.confirm("Borrar día especial", `¿Borrar <b>${UI.esc(r.note || "")}</b> (${fmt(r)})?`, "Borrar", true))) return;
+      await API.del(`/api/admin/special-days/${r.id}`);
+      UI.toast("Día especial borrado");
+      renderSpecialDays();
+      scheduleAnalyze();
+    }
+  };
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const body = { note: f.elements.note.value, date: f.elements.date.value, shift: f.elements.shift.value,
+      extra_pisteros: Number(f.elements.extra_pisteros.value), yearly: f.elements.yearly.checked };
+    try {
+      if (f.dataset.id) await API.put(`/api/admin/special-days/${f.dataset.id}`, body);
+      else await API.post("/api/admin/special-days", body);
+      f.reset();
+      delete f.dataset.id;
+      f.querySelector("button.primary").textContent = "Agregar día especial";
+      UI.toast("Día especial guardado. Si ese mes ya está armado, va a aparecer \"Falta Pistero\": completalo a mano o regenerá desde ese día.", 6000);
+      renderSpecialDays();
+      scheduleAnalyze();
+    } catch (err) {
+      UI.toast(err.message, 4000);
+    }
+  };
+}
+
 function afterClosuresChange() {
   renderClosures();
   scheduleAnalyze();
@@ -1018,10 +1074,12 @@ function afterClosuresChange() {
 // ============ configuración ============
 
 async function renderConfig() {
+  renderSpecialDays();
   const s = A.settings;
   const f = $("#cfg-form");
   for (const k of ["max_horas4", "libres_objetivo", "bloque", "max_dias_seguidos", "tiempo_generador"]) f.elements[k].value = s[k];
   f.elements.cajeros_estrictos.checked = !!s.cajeros_estrictos;
+  f.elements.encargado_fuera.checked = !!s.encargado_fuera;
   $("#staffing").innerHTML = `<table class="grid"><thead><tr><th>Puesto</th>${SHIFTS.map((x) => `<th class="num">${x.name}</th>`).join("")}</tr></thead><tbody>
     ${POSITIONS.map((p) => `<tr><td>${POS_NAME[p]}</td>${SHIFTS.map((x) => `<td class="num"><input class="input" type="number" min="0" max="9" style="width:70px" data-st="${x.key}|${p}" value="${s.staffing[x.key]?.[p] || 0}"></td>`).join("")}</tr>`).join("")}
     </tbody></table>`;
@@ -1030,11 +1088,15 @@ async function renderConfig() {
     const body = {};
     for (const k of ["max_horas4", "libres_objetivo", "bloque", "max_dias_seguidos", "tiempo_generador"]) body[k] = Number(f.elements[k].value);
     body.cajeros_estrictos = f.elements.cajeros_estrictos.checked;
+    const wasOut = !!A.settings.encargado_fuera;
+    body.encargado_fuera = f.elements.encargado_fuera.checked;
     body.staffing = { T1: {}, T2: {}, T3: {} };
     $$("[data-st]", f).forEach((i) => { const [sh, p] = i.dataset.st.split("|"); body.staffing[sh][p] = Number(i.value); });
     try {
       A.settings = await API.put("/api/admin/settings", body);
-      UI.toast("Configuración guardada");
+      UI.toast(wasOut !== body.encargado_fuera
+        ? "Guardado. Para que se aplique, volvé a generar el mes (Generar → Rehacer desde la fecha)."
+        : "Configuración guardada", 5000);
       scheduleAnalyze();
     } catch (err) {
       UI.toast(err.message, 4000);

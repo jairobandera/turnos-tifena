@@ -40,6 +40,8 @@ def test_todo_cubierto_y_cajeros_estrictos(diciembre):
 
 def test_nadie_supera_sus_libres_ni_horas4(diciembre):
     for row in diciembre["analysis"]["report"]:
+        if row["jornalero"]:
+            continue   # los jornaleros (Soledad, Fabiana) no tienen tope de libres
         assert row["libres"] <= row["libres_objetivo"], row["name"]
         assert row["horas4"] <= diciembre["settings"]["max_horas4"], row["name"]
 
@@ -75,7 +77,7 @@ def test_rehacer_final_de_mes_respeta_tope_de_libres(conn):
     assert r2["ok"] and r2["generated_days"] == ["2026-12-28", "2026-12-29", "2026-12-30", "2026-12-31"]
     full = db.get_assignments(conn, f - timedelta(days=20), f - timedelta(days=1)) + r2["assignments"]
     rep = rules.analyze(2026, 12, full, emps, lic, settings)["report"]
-    assert all(row["libres"] <= row["libres_objetivo"] for row in rep), [(x["name"], x["libres"]) for x in rep]
+    assert all(row["libres"] <= row["libres_objetivo"] for row in rep if not row["jornalero"]), [(x["name"], x["libres"]) for x in rep]
 
 
 def test_generador_no_pone_ocasionales_solo(diciembre):
@@ -93,4 +95,63 @@ def test_generador_respeta_cierres(conn):
     assert {x["shift"] for x in r["assignments"] if x["date"] == "2026-12-26"} == {"T1", "T2", "T3"}
     full = db.get_assignments(conn, f - timedelta(days=20), f - timedelta(days=1)) + r["assignments"]
     rep = rules.analyze(2026, 12, full, emps, lic, settings, cl)["report"]
-    assert all(x["libres"] <= x["libres_objetivo"] for x in rep)
+    assert all(x["libres"] <= x["libres_objetivo"] for x in rep if not x["jornalero"])
+
+
+def test_reglas_fijas_y_sin_refuerzos(diciembre):
+    """Belén sólo mañana, Soledad sólo tarde, Maycol nunca noche; nunca 2 en el spot ni pisteros de más."""
+    from collections import Counter
+    conn = diciembre["conn"]
+    names = {e["id"]: e["name"] for e in db.get_employees(conn)}
+    st = db.get_settings(conn)["staffing"]
+    gen = [a for a in diciembre["r"]["assignments"] if a["date"] >= "2026-12-01"]
+    assert not [a for a in gen if names[a["employee_id"]] == "Belen" and a["shift"] != "T1"]
+    assert not [a for a in gen if names[a["employee_id"]] == "Soledad" and a["shift"] != "T2"]
+    assert not [a for a in gen if names[a["employee_id"]] == "Maycol" and a["shift"] == "T3"]
+    cnt = Counter((a["date"], a["shift"], a["position"]) for a in gen if a["position"] != "otro")
+    assert all(n <= st[s].get(p, 0) for (d, s, p), n in cnt.items()), [k for k, n in cnt.items() if n > st[k[1]].get(k[2], 0)]
+
+
+def test_jornalera_absorbe_lo_que_sobra(diciembre):
+    rep = {r["name"]: r for r in diciembre["analysis"]["report"]}
+    assert rep["Soledad"]["jornalero"]
+    assert not [i for i in diciembre["analysis"]["issues"] if "Soledad" in i["msg"] and "libres" in i["msg"]]
+
+
+def _generar(conn, extras=None):
+    emps, settings, lic = db.get_employees(conn), db.get_settings(conn), db.get_licenses(conn)
+    f, l = db.month_bounds(2026, 12)
+    cl = rules.expand_closures(db.get_closures(conn), f - timedelta(days=20), l + timedelta(days=1))
+    return scheduler.generate(2026, 12, emps, db.get_assignments(conn, f - timedelta(days=20), l), lic, settings,
+                              closures=cl, extras=extras or {})
+
+
+def test_dia_especial_agrega_pistero(conn):
+    conn.execute("INSERT INTO special_days(date, shift, extra_pisteros, note, yearly) VALUES ('2026-12-20', 'T2', 1, 'Feriado', 0)")
+    conn.commit()
+    ex = rules.expand_special_days(db.get_special_days(conn), "2026-12-01", "2026-12-31")
+    assert ex == {("2026-12-20", "T2"): 1}
+    r = _generar(conn, ex)
+    assert r["ok"]
+    pist = [a for a in r["assignments"] if a["date"] == "2026-12-20" and a["shift"] == "T2" and a["position"] == "pistero"]
+    assert len(pist) == 3
+    otros = [a for a in r["assignments"] if a["date"] == "2026-12-21" and a["shift"] == "T2" and a["position"] == "pistero"]
+    assert len(otros) == 2
+
+
+def test_encargado_fuera_de_planilla(conn):
+    db.save_settings(conn, {"encargado_fuera": True})
+    r = _generar(conn)
+    assert r["ok"]
+    maycol = [e["id"] for e in db.get_employees(conn) if e["name"] == "Maycol"][0]
+    mine = [a for a in r["assignments"] if a["employee_id"] == maycol and a["date"] >= "2026-12-01"]
+    assert mine and all(a["position"] == "otro" and a["note"] == "Otros servicios" for a in mine)
+
+
+
+def test_auxiliares_fabiana_cubre_libres(diciembre):
+    """Silvia y Valeria con sus 6 libres; Fabiana (jornalera) cubre lo que falta."""
+    rep = {r["name"]: r for r in diciembre["analysis"]["report"]}
+    assert rep["Fabiana"]["jornalero"]
+    assert rep["Silvia"]["libres"] == rep["Silvia"]["libres_objetivo"]
+    assert rep["Valeria"]["libres"] == rep["Valeria"]["libres_objetivo"]

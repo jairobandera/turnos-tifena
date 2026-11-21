@@ -18,14 +18,14 @@ def week_ranges(start, end):
     return out
 
 
-def build_weeks(start, end, assignments, employees, licenses, staffing, closures=()):
+def build_weeks(start, end, assignments, employees, licenses, staffing, closures=(), extras=None):
     lic = license_days(licenses)
     s, e = iso(parse_date(start)), iso(parse_date(end))
     with_data = {a["date"] for a in assignments}
     weeks = []
     for mon, sun in week_ranges(start, end):
         # semana completa lun-dom; los días fuera del rango sólo si ya están armados
-        days = [day_layout(iso(d), assignments, employees, lic, staffing, closures) for d in date_range(mon, sun)
+        days = [day_layout(iso(d), assignments, employees, lic, staffing, closures, extras) for d in date_range(mon, sun)
                 if s <= iso(d) <= e or iso(d) in with_data]
         weeks.append({"start": mon, "end": sun, "label": f"{fmt_day(mon)} al {fmt_day(sun)}", "days": days})
     return weeks

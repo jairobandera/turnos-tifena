@@ -1,7 +1,10 @@
 CREATE TABLE IF NOT EXISTS employees (
-    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    name    TEXT NOT NULL UNIQUE,
-    active  INTEGER NOT NULL DEFAULT 1
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    name      TEXT NOT NULL UNIQUE,
+    active    INTEGER NOT NULL DEFAULT 1,
+    shifts    TEXT NOT NULL DEFAULT 'T3,T1,T2',   -- turnos que puede hacer (ej. Belén sólo 'T1')
+    jornalero INTEGER NOT NULL DEFAULT 0,         -- jornalero: sin tope de libres, cubre a los demás
+    jornal_dias INTEGER NOT NULL DEFAULT 0        -- días por mes que trabaja el jornalero (0 = sólo lo necesario)
 );
 
 -- level: 'principal' | 'suplente'
@@ -51,6 +54,16 @@ CREATE TABLE IF NOT EXISTS closures (
     end    TEXT NOT NULL,
     note   TEXT NOT NULL DEFAULT '',
     yearly INTEGER NOT NULL DEFAULT 0
+);
+
+-- días especiales (feriados, días movidos): pisteros extra en un turno. yearly = todos los años
+CREATE TABLE IF NOT EXISTS special_days (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    date           TEXT NOT NULL,     -- 'YYYY-MM-DD'
+    shift          TEXT NOT NULL,     -- T1 | T2 | T3
+    extra_pisteros INTEGER NOT NULL DEFAULT 1,
+    note           TEXT NOT NULL DEFAULT '',
+    yearly         INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS settings (

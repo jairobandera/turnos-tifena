@@ -19,6 +19,7 @@ DEFAULT_SETTINGS = {
     "cajeros_estrictos": True,
     "max_dias_seguidos": 6,
     "tiempo_generador": 25,
+    "encargado_fuera": False,   # el encargado no entra en la planilla: queda en "Otros servicios"
     "staffing": {
         "T3": {"cajero": 1, "pistero": 1},
         "T1": {"cajero": 1, "shop": 1, "pistero": 2, "auxiliar": 1},
@@ -53,6 +54,13 @@ def init_schema(conn):
         for start, end, note in DEFAULT_CLOSURES:
             conn.execute("INSERT INTO closures(start, end, note, yearly) VALUES (?, ?, ?, 1)", (start, end, note))
         conn.execute("INSERT INTO settings(key, value) VALUES ('closures_seeded', 'true')")
+    ecols = {r["name"] for r in conn.execute("PRAGMA table_info(employees)")}
+    if "shifts" not in ecols:
+        conn.execute("ALTER TABLE employees ADD COLUMN shifts TEXT NOT NULL DEFAULT 'T3,T1,T2'")
+    if "jornalero" not in ecols:
+        conn.execute("ALTER TABLE employees ADD COLUMN jornalero INTEGER NOT NULL DEFAULT 0")
+    if "jornal_dias" not in ecols:
+        conn.execute("ALTER TABLE employees ADD COLUMN jornal_dias INTEGER NOT NULL DEFAULT 0")
     ucols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
     if "employee_id" not in ucols:
         conn.execute("ALTER TABLE users ADD COLUMN employee_id INTEGER REFERENCES employees(id)")
@@ -109,17 +117,36 @@ def get_employees(conn, include_inactive=True):
             r["position"]: r["level"]
             for r in conn.execute("SELECT position, level FROM employee_positions WHERE employee_id = ?", (row["id"],))
         }
-        emps.append({"id": row["id"], "name": row["name"], "active": bool(row["active"]), "positions": pos})
+        shifts = [s for s in (row["shifts"] or "").split(",") if s in SHIFTS] or list(SHIFTS)
+        emps.append({"id": row["id"], "name": row["name"], "active": bool(row["active"]), "positions": pos,
+                     "shifts": shifts, "jornalero": bool(row["jornalero"]), "jornal_dias": int(row["jornal_dias"] or 0)})
     return emps
+
+
+def _shifts_str(data, default="T3,T1,T2"):
+    if "shifts" not in data:
+        return None if default is None else default
+    lst = [s for s in SHIFTS if s in (data.get("shifts") or [])]
+    if not lst:
+        raise ValueError("Tiene que poder hacer al menos un turno")
+    return ",".join(lst)
 
 
 def save_employee(conn, data, emp_id=None):
     name = data["name"].strip()
+    active = 1 if data.get("active", True) else 0
     if emp_id is None:
-        cur = conn.execute("INSERT INTO employees(name, active) VALUES (?, ?)", (name, 1 if data.get("active", True) else 0))
+        cur = conn.execute("INSERT INTO employees(name, active, shifts, jornalero) VALUES (?, ?, ?, ?)",
+                           (name, active, _shifts_str(data), 1 if data.get("jornalero") else 0))
         emp_id = cur.lastrowid
     else:
-        conn.execute("UPDATE employees SET name = ?, active = ? WHERE id = ?", (name, 1 if data.get("active", True) else 0, emp_id))
+        conn.execute("UPDATE employees SET name = ?, active = ? WHERE id = ?", (name, active, emp_id))
+        if "shifts" in data:
+            conn.execute("UPDATE employees SET shifts = ? WHERE id = ?", (_shifts_str(data), emp_id))
+        if "jornalero" in data:
+            conn.execute("UPDATE employees SET jornalero = ? WHERE id = ?", (1 if data["jornalero"] else 0, emp_id))
+    if "jornal_dias" in data:
+        conn.execute("UPDATE employees SET jornal_dias = ? WHERE id = ?", (max(0, min(31, int(data["jornal_dias"] or 0))), emp_id))
     if "positions" in data:
         conn.execute("DELETE FROM employee_positions WHERE employee_id = ?", (emp_id,))
         for pos, level in data["positions"].items():
@@ -181,6 +208,10 @@ def published_months(conn):
 
 def get_closures(conn):
     return [{**dict(r), "yearly": bool(r["yearly"])} for r in conn.execute("SELECT * FROM closures ORDER BY substr(start, 6)")]
+
+
+def get_special_days(conn):
+    return [{**dict(r), "yearly": bool(r["yearly"])} for r in conn.execute("SELECT * FROM special_days ORDER BY substr(date, 6), shift")]
 
 
 # ---------- licencias ----------

@@ -33,6 +33,14 @@ EMPLOYEES = {
     "Fabiana": {"auxiliar": P},
 }
 
+# Turnos que puede hacer cada uno (por defecto los tres) y jornaleros.
+EMPLOYEE_RULES = {
+    "Belen": {"shifts": ["T1"]},                          # siempre la mañana
+    "Soledad": {"shifts": ["T2"], "jornalero": True, "jornal_dias": 15},   # siempre la tarde; jornalera ~15 días/mes
+    "Fabiana": {"jornalero": True},                        # auxiliar jornalera: cubre los libres de Silvia y Valeria
+    "Maycol": {"shifts": ["T1", "T2"]},                   # nunca la noche
+}
+
 # Transcripción de las planillas en papel. Por día: (T3, T1, T2)
 # T3 = (cajero, pistero); T1/T2 = (cajero, shop, [pisteros], auxiliar)
 EXAMPLE = {
@@ -74,7 +82,8 @@ def seed(conn, with_example=True):
         return False
     ids = {}
     for name, pos in EMPLOYEES.items():
-        ids[name] = db.save_employee(conn, {"name": name, "active": True, "positions": pos})
+        extra = EMPLOYEE_RULES.get(name, {})
+        ids[name] = db.save_employee(conn, {"name": name, "active": True, "positions": pos, **extra})
     conn.execute(
         "INSERT INTO users(username, password_hash, must_change, employee_id) VALUES (?, ?, 1, ?)",
         ("maycol", generate_password_hash(os.environ.get("TURNOS_ADMIN_PASSWORD", "tifena")), ids["Maycol"]),

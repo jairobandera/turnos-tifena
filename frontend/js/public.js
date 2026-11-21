@@ -60,7 +60,7 @@ async function load() {
       renderMyDays(dates, byDay, whoId, { licDays: S.licDays, unpublished, special: S.special });
     return;
   }
-  const ctx = { emps: S.emps, staffing: S.staffing, licDays: S.licDays, editable: false, highlight: whoId, special: S.special };
+  const ctx = { emps: S.emps, staffing: S.staffing, licDays: S.licDays, editable: false, highlight: whoId, special: S.special, extra: data.extra || {} };
   content.innerHTML = dates
     .filter((d) => !(S.mode === "month" && unpublished.has(d)))
     .map((d) => renderDay(d, byDay.get(d) || [], { ...ctx, unpublished: unpublished.has(d) }))

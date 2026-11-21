@@ -83,7 +83,10 @@ function renderDay(date, assigns, ctx) {
         <div class="shift-rows"><div class="closed-msg">CERRADO</div></div></section>`;
     }
     const hours = sp[s.key] || s.hours;
-    const need = (ctx.staffing && ctx.staffing[s.key]) || {};
+    // dotación del día: la normal + pisteros extra si es día especial
+    const need = { ...((ctx.staffing && ctx.staffing[s.key]) || {}) };
+    const extra = (ctx.extra && ctx.extra[date] && ctx.extra[date][s.key]) || 0;
+    if (extra) need.pistero = (need.pistero || 0) + extra;
     const present = new Set(assigns.filter((a) => a.shift === s.key).map((a) => a.position));
     const rows = [...POSITIONS, TASK].filter((p) => (need[p] || 0) > 0 || present.has(p)).map((p) => {
       const list = assigns.filter((a) => a.shift === s.key && a.position === p).sort((a, b) => (a.ord || 0) - (b.ord || 0));
@@ -93,14 +96,14 @@ function renderDay(date, assigns, ctx) {
         inner += `<li class="chip missing">sin asignar</li>`.repeat(n - list.length);
       }
       const under = ctx.editable && list.length < n ? " under" : "";
-      // "+ agregar" sólo donde falta gente, o en pisteros (refuerzos)
-      const showAdd = ctx.editable && p !== TASK && (list.length < n || p === "pistero");
-      const add = showAdd ? `<button class="add" data-add="${date}|${s.key}|${p}">+ ${list.length < n ? "agregar" : "refuerzo"}</button>` : "";
+      // "+ agregar" sólo donde falta gente (los refuerzos van en los días especiales)
+      const showAdd = ctx.editable && p !== TASK && list.length < n;
+      const add = showAdd ? `<button class="add" data-add="${date}|${s.key}|${p}">+ agregar</button>` : "";
       return `<div class="prow"><div class="plabel">${posLabel(s.key, p)}</div>
         <div><ul class="slot${under}" data-date="${date}" data-shift="${s.key}" data-pos="${p}">${inner}</ul>${add}</div></div>`;
     }).join("");
     const task = ctx.editable && ctx.canTask && !present.has(TASK) ? `<button class="add task" data-add="${date}|${s.key}|${TASK}">+ otra tarea</button>` : "";
-    return `<section class="shift ${s.key}${sp[s.key] ? " special" : ""}"><div class="shift-head">${s.head}<span class="hours">${hours}${sp[s.key] ? " ⚠️" : ""}</span></div>
+    return `<section class="shift ${s.key}${sp[s.key] ? " special" : ""}"><div class="shift-head">${s.head}<span class="hours">${hours}${sp[s.key] ? " ⚠️" : ""}</span>${extra ? `<span class="badge refuerzo-badge">Refuerzo +${extra}</span>` : ""}</div>
       <div class="shift-rows">${rows}${task}</div></section>`;
   };
 

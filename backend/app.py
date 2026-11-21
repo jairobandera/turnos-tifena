@@ -77,6 +77,16 @@ def closures(c, start, end):
     return rules.expand_closures(db.get_closures(c), start, end)
 
 
+def extras_for(c, start, end):
+    """Pisteros extra de los días especiales: {(fecha, turno): n}."""
+    return rules.expand_special_days(db.get_special_days(c), start, end)
+
+
+def month_extras(c, year, month):
+    first, last = db.month_bounds(year, month)
+    return extras_for(c, first, last)
+
+
 def month_closures(c, year, month):
     first, last = db.month_bounds(year, month)
     return closures(c, first - timedelta(days=HISTORY + 1), last + timedelta(days=1))
@@ -84,10 +94,12 @@ def month_closures(c, year, month):
 
 def analysis(c, year, month, assignments):
     emps, settings, lics = db.get_employees(c), db.get_settings(c), db.get_licenses(c)
-    res = rules.analyze(year, month, assignments, emps, lics, settings, month_closures(c, year, month))
+    extras = month_extras(c, year, month)
+    res = rules.analyze(year, month, assignments, emps, lics, settings, month_closures(c, year, month), extras)
     # "otras tareas" sólo se sugieren al encargado logueado, para sí mismo
     res["suggestions"] = rules.suggest(year, month, assignments, emps, settings, date.today(),
-                                       only_encargado=my_employee_id(c) or -1, licenses=lics)
+                                       only_encargado=my_employee_id(c) or -1, licenses=lics,
+                                       extras=extras, report=res["report"])
     return res
 
 
@@ -142,7 +154,8 @@ def api_schedule():
             if (int(a["date"][:4]), int(a["date"][5:7])) in pub]
     published_days = [db.iso(d) for d in db.date_range(start, end) if (d.year, d.month) in pub]
     return jsonify({"assignments": rows, "published_days": published_days,
-                    "special": rules.special_hours(start, end, closures(c, start, end))})
+                    "special": rules.special_hours(start, end, closures(c, start, end)),
+                    "extra": rules.extras_json(extras_for(c, start, end))})
 
 
 # ---------------- sesión ----------------
@@ -206,11 +219,16 @@ def check_tasks(c, first, last, incoming):
     Las que ya estaban guardadas se conservan aunque guarde otro administrador."""
     me = c.execute("SELECT employee_id FROM users WHERE id = ?", (session["user_id"],)).fetchone()["employee_id"]
     saved = {(a["date"], a["shift"], a["employee_id"], a["note"]) for a in db.get_assignments(c, first, last) if a["position"] == db.TASK}
+    fuera = db.get_settings(c).get("encargado_fuera")
+    encargados = {e["id"] for e in db.get_employees(c) if db.TASK in e["positions"]}
     for a in incoming:
         if a.get("position") != db.TASK:
             continue
         key = (a["date"], a["shift"], int(a["employee_id"]), (a.get("note") or "").strip()[:60])
         if key in saved:
+            continue
+        # lo que arma el generador con el encargado fuera de planilla ("Otros servicios") se acepta
+        if int(a["employee_id"]) in encargados and key[3] == scheduler.OTROS_SERVICIOS:
             continue
         if not me or int(a["employee_id"]) != me:
             raise PermissionError("Sólo el encargado puede asignarse \"otras tareas\" a sí mismo.")
@@ -267,7 +285,8 @@ def admin_generate():
     current = data.get("assignments")
     assigns = with_history(c, year, month, current)
     res = scheduler.generate(year, month, db.get_employees(c), assigns, db.get_licenses(c), db.get_settings(c),
-                             desde=data.get("desde"), mode=mode, closures=month_closures(c, year, month))
+                             desde=data.get("desde"), mode=mode, closures=month_closures(c, year, month),
+                             extras=month_extras(c, year, month))
     if not res["ok"]:
         return bad(res["msg"], 422)
     res["analysis"] = analysis(c, year, month, with_history(c, year, month, res["assignments"]))
@@ -300,7 +319,7 @@ def admin_reflow():
     target["locked"] = True
     res = scheduler.generate(year, month, db.get_employees(c), with_history(c, year, month, current),
                              db.get_licenses(c), db.get_settings(c), desde=day, mode="rehacer",
-                             closures=month_closures(c, year, month))
+                             closures=month_closures(c, year, month), extras=month_extras(c, year, month))
     if not res["ok"]:
         return bad(res["msg"], 422)
     res["analysis"] = analysis(c, year, month, with_history(c, year, month, res["assignments"]))
@@ -348,6 +367,58 @@ def admin_closure_update(cid):
 def admin_closure_delete(cid):
     c = conn()
     c.execute("DELETE FROM closures WHERE id = ?", (cid,))
+    c.commit()
+    return jsonify({"ok": True})
+
+
+# ---------------- días especiales (refuerzos) ----------------
+
+@app.get("/api/admin/special-days")
+@admin_required
+def admin_special_days():
+    return jsonify(db.get_special_days(conn()))
+
+
+def _special_payload(data):
+    d = (data.get("date") or "").strip()[:10]
+    try:
+        db.parse_date(d)
+    except Exception:
+        raise ValueError("Fecha inválida")
+    shift = data.get("shift")
+    if shift not in db.SHIFTS:
+        raise ValueError("Elegí el turno")
+    n = int(data.get("extra_pisteros") or 0)
+    if not 1 <= n <= 3:
+        raise ValueError("Entre 1 y 3 pisteros extra")
+    return d, shift, n, (data.get("note") or "").strip()[:60], 1 if data.get("yearly") else 0
+
+
+@app.post("/api/admin/special-days")
+@admin_required
+def admin_special_create():
+    c = conn()
+    cur = c.execute("INSERT INTO special_days(date, shift, extra_pisteros, note, yearly) VALUES (?, ?, ?, ?, ?)",
+                    _special_payload(request.get_json(force=True)))
+    c.commit()
+    return jsonify({"id": cur.lastrowid})
+
+
+@app.put("/api/admin/special-days/<int:sid>")
+@admin_required
+def admin_special_update(sid):
+    c = conn()
+    c.execute("UPDATE special_days SET date = ?, shift = ?, extra_pisteros = ?, note = ?, yearly = ? WHERE id = ?",
+              (*_special_payload(request.get_json(force=True)), sid))
+    c.commit()
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/admin/special-days/<int:sid>")
+@admin_required
+def admin_special_delete(sid):
+    c = conn()
+    c.execute("DELETE FROM special_days WHERE id = ?", (sid,))
     c.commit()
     return jsonify({"ok": True})
 
@@ -420,6 +491,8 @@ def admin_employee_create():
         return bad("Falta el nombre")
     try:
         return jsonify({"id": db.save_employee(conn(), data)})
+    except ValueError as e:
+        return bad(str(e))
     except Exception:
         return bad("Ya existe un empleado con ese nombre")
 
@@ -432,6 +505,8 @@ def admin_employee_update(eid):
         return bad("Falta el nombre")
     try:
         db.save_employee(conn(), data, eid)
+    except ValueError as e:
+        return bad(str(e))
     except Exception:
         return bad("Ya existe un empleado con ese nombre")
     return jsonify({"ok": True})
@@ -450,6 +525,8 @@ def admin_settings():
             clean[k] = max(0, int(data[k]))
     if "cajeros_estrictos" in data:
         clean["cajeros_estrictos"] = bool(data["cajeros_estrictos"])
+    if "encargado_fuera" in data:
+        clean["encargado_fuera"] = bool(data["encargado_fuera"])
     if "staffing" in data:
         st = {}
         for s in db.SHIFTS:
@@ -526,7 +603,8 @@ def admin_export(fmt):
     wk_end = e + timedelta(days=6 - e.weekday())
     assigns = db.get_assignments(c, wk_start, wk_end)
     weeks = build_weeks(s, e, assigns, db.get_employees(c), db.get_licenses(c), db.get_settings(c)["staffing"],
-                        closures(c, wk_start - timedelta(days=1), wk_end + timedelta(days=1)))
+                        closures(c, wk_start - timedelta(days=1), wk_end + timedelta(days=1)),
+                        extras_for(c, wk_start, wk_end))
     if s.day == 1 and e == db.month_bounds(s.year, s.month)[1]:
         name = f"Turnos {MONTHS[s.month - 1].capitalize()} {s.year}"
     else:

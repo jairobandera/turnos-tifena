@@ -55,7 +55,7 @@ def test_libres_de_mas_es_error(conn):
     assigns = [a(d, "T1", "cajero", emp_id(conn, "Jairo")) for d in days]
     res = rules.analyze(2026, 12, assigns, emps, [], db.get_settings(conn))
     luis = emp_id(conn, "Luis")
-    assert any(i["level"] == "error" and i["employee_id"] == luis and "más de los" in i["msg"] for i in res["issues"])
+    assert any(i["level"] == "warn" and i["employee_id"] == luis and "más de los" in i["msg"] for i in res["issues"])
 
 
 def test_otras_tareas_solo_encargado(conn):
@@ -89,10 +89,13 @@ def test_sugerencias_soledad_a_limpieza(conn):
     # Andres de refuerzo (3er pistero) y sabe hacer spot -> sugerencia
     s = rules.suggest(2026, 12, base + [a(d, "T2", "pistero", andres)], emps, st, db.parse_date("2026-12-01"))
     assert len(s) == 1 and s[0]["employee_id"] == sol and s[0]["to_position"] == "auxiliar" and s[0]["covers"] == ["Andres", "Rafael"]
-    # falta auxiliar -> recomendado
+    # falta auxiliar y Andrés está libre con libres de sobra -> recomendado
     sin_aux = [x for x in base if x["position"] != "auxiliar"]
-    s = rules.suggest(2026, 12, sin_aux, emps, st, db.parse_date("2026-12-01"))
-    assert s and s[0]["score"] >= 3
+    rep = [{"employee_id": andres, "libres": 8, "libres_objetivo": 6, "jornalero": False}]
+    s = rules.suggest(2026, 12, sin_aux, emps, st, db.parse_date("2026-12-01"), report=rep)
+    assert s and s[0]["score"] >= 3 and s[0]["covers"] == ["Andres"]
+    # sin nadie que cubra el spot, no se sugiere
+    assert rules.suggest(2026, 12, sin_aux, emps, st, db.parse_date("2026-12-01")) == []
     # días pasados no se sugieren
     assert rules.suggest(2026, 12, base + [a(d, "T2", "pistero", andres)], emps, st, db.parse_date("2026-12-11")) == []
 

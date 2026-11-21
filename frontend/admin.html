@@ -99,7 +99,7 @@
       <section id="tab-empleados" hidden>
         <div class="card">
           <h3>Empleados y puestos</h3>
-          <p class="muted" style="margin-top:0">Principal = su puesto habitual. Suplente = lo cubre cuando falta alguien. El generador usa primero a los principales. <b>Ocasional</b> = el generador no lo pone solo: la app lo sugiere (💡) y vos decidís (ej. Soledad a limpieza). <b>Encargado</b>: puede asignarse a sí mismo "Otras tareas" (corte de pasto, mantenimiento…); ese turno trabaja pero no ocupa puesto. Tiene que estar vinculado a su usuario en Configuración.</p>
+          <p class="muted" style="margin-top:0">Principal = su puesto habitual. Suplente = lo cubre cuando falta alguien. El generador usa primero a los principales. <b>Ocasional</b> = el generador no lo pone solo: la app lo sugiere (💡) y vos decidís (ej. Soledad a limpieza). <b>Turnos</b>: los que puede hacer cada uno (N = noche, M = mañana, T = tarde; ej. Belén sólo M). <b>Jornalero</b>: cubre a los demás y no tiene tope de libres; con "días" trabaja esa cantidad por mes (Soledad 15), vacío = sólo lo necesario (Fabiana cubre los libres de Silvia y Valeria). Si aun así sobra gente, el encargado va a <i>Otros servicios</i> para que nadie pase de sus libres. <b>Encargado</b>: puede asignarse a sí mismo "Otras tareas" (corte de pasto, mantenimiento…); ese turno trabaja pero no ocupa puesto. Tiene que estar vinculado a su usuario en Configuración.</p>
           <div class="table-wrap" id="emp-table"></div>
         </div>
       </section>
@@ -117,10 +117,25 @@
               <label class="field">Máximo de días seguidos sin libre<input type="number" min="1" name="max_dias_seguidos"></label>
               <label class="field">Tiempo máximo del generador (segundos)<input type="number" min="5" max="120" name="tiempo_generador"></label>
               <label class="field wide" style="flex-direction:row;align-items:center;gap:8px;color:var(--ink)"><input type="checkbox" name="cajeros_estrictos" style="width:20px;height:20px"> Cajeros principales sí o sí en bloques completos (Mañana → Noche → Tarde)</label>
+              <label class="field wide" style="flex-direction:row;align-items:center;gap:8px;color:var(--ink)"><input type="checkbox" name="encargado_fuera" style="width:20px;height:20px">
+                <span>Encargado fuera de planilla: al generar, sus días de trabajo quedan como <b>Otros servicios</b> y no ocupa puesto (si hace falta, se pone a mano en pista)</span></label>
             </div>
             <h3 style="margin-top:16px">Dotación por turno</h3>
             <div class="table-wrap" id="staffing"></div>
             <div class="actionbar" style="margin-top:12px"><button class="btn primary">Guardar configuración</button></div>
+          </form>
+        </div>
+        <div class="card">
+          <h3>Días especiales (refuerzos)</h3>
+          <p class="muted" style="margin-top:0">Feriados o días muy movidos: se agregan pisteros extra en ese turno. Fuera de estos días nunca hay refuerzos (ni 2 en el spot ni 3 pisteros).</p>
+          <div class="table-wrap" id="specials"></div>
+          <form id="special-form" class="form-grid" style="margin-top:12px">
+            <label class="field">Motivo<input name="note" placeholder="Ej: Feriado, fin de semana largo" maxlength="60"></label>
+            <label class="field">Fecha<input type="date" name="date" required></label>
+            <label class="field">Turno<select name="shift" required><option value="T1">Mañana</option><option value="T2">Tarde</option><option value="T3">Noche</option></select></label>
+            <label class="field">Pisteros extra<select name="extra_pisteros"><option>1</option><option>2</option><option>3</option></select></label>
+            <label class="field" style="flex-direction:row;align-items:center;gap:8px;color:var(--ink)"><input type="checkbox" name="yearly" style="width:20px;height:20px"> Se repite todos los años</label>
+            <div class="actionbar" style="align-items:flex-end"><button class="btn primary">Agregar día especial</button></div>
           </form>
         </div>
         <div class="card">

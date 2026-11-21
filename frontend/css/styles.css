@@ -165,6 +165,7 @@ table.cmp { max-width: 520px; }
 .shift.closed .shift-head { background: #eceff3; color: #6b7280; }
 .closed-msg { text-align: center; font-weight: 800; letter-spacing: 2px; color: #9aa1ab; padding: 14px 0; }
 .shift.special .shift-head .hours { color: #b45309; font-weight: 700; }
+.refuerzo-badge { background: #dcfce7; color: var(--ok); text-transform: none; font-size: 11px; }
 .closed-badge { background: #374151; color: #fff; }
 .issues { text-transform: none; border-top: 1px solid var(--soft-line); padding: 6px 10px; font-size: 13px; }
 .issues summary { cursor: pointer; font-weight: 600; color: var(--warn); }

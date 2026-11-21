@@ -47,7 +47,8 @@ def license_conflicts(year, month, assignments, employees, licenses, today):
     return out
 
 
-def suggest(year, month, assignments, employees, settings, today, only_encargado=None, licenses=()):
+def suggest(year, month, assignments, employees, settings, today, only_encargado=None, licenses=(),
+            extras=None, report=None):
     """Sugiere días (de hoy en adelante) en que conviene pasar a alguien a su puesto "ocasional"
     (ej. Soledad del spot a Auxiliar/limpieza) y quién podría cubrir su lugar.
 
@@ -67,6 +68,18 @@ def suggest(year, month, assignments, employees, settings, today, only_encargado
     by_day = defaultdict(list)
     for a in assignments:
         by_day[a["date"]].append(a)
+    lic = license_days(licenses or [])
+    # quién tiene libres de sobra este mes (o es jornalero): puede venir a cubrir
+    spare = {r["employee_id"] for r in (report or []) if r.get("jornalero") or r["libres"] > r["libres_objetivo"]}
+
+    def free_covers(day, ds, s, p):
+        """Gente libre ese día que sabe hacer el puesto p en el turno s y le sobran libres (o es jornalero)."""
+        busy = {b["employee_id"] for b in day}
+        return [o["name"] for o in employees
+                if o["active"] and o["id"] in spare and o["id"] not in busy and ds not in lic.get(o["id"], ())
+                and s in (o.get("shifts") or ["T3", "T1", "T2"])
+                and o["positions"].get(p) in ("principal", "suplente")]
+
     out = []
     for d in date_range(start, last):
         ds = iso(d)
@@ -76,13 +89,16 @@ def suggest(year, month, assignments, employees, settings, today, only_encargado
         count = defaultdict(int)
         for a in day:
             count[(a["shift"], a["position"])] += 1
+
+        def need_of(s, p):
+            return staffing_for(staffing, extras, ds, s).get(p, 0)
         for e, p_to in occasional:
             best = None
             for a in day:
                 if a["employee_id"] != e["id"] or a["position"] in (p_to, "otro") or a.get("locked"):
                     continue
                 s, p_from = a["shift"], a["position"]
-                need_to = staffing.get(s, {}).get(p_to, 0)
+                need_to = need_of(s, p_to)
                 if not need_to:
                     continue
                 score, reasons = 0, []
@@ -94,17 +110,23 @@ def suggest(year, month, assignments, employees, settings, today, only_encargado
                     other = emp_by_id.get(b["employee_id"])
                     if b["shift"] != s or b["employee_id"] == e["id"] or not other or b["position"] == "otro":
                         continue
-                    is_extra = count[(s, b["position"])] > staffing.get(s, {}).get(b["position"], 0)
+                    is_extra = count[(s, b["position"])] > need_of(s, b["position"])
                     if is_extra and other["positions"].get(p_from) in ("principal", "suplente"):
                         covers.append(other["name"])
-                if covers:
+                libres_cover = free_covers(day, ds, s, p_from)
+                if libres_cover and not covers:
+                    score += 2
+                    who = sorted(set(libres_cover))
+                    reasons.append(f"{' o '.join(who)} {'está' if len(who) == 1 else 'están'} libre y le sobran libres: puede cubrir {POS_NAME[p_from]}")
+                    covers = who
+                elif covers:
                     score += 2
                     who = sorted(set(covers))
                     if len(who) == 1:
                         reasons.append(f"{who[0]} está de refuerzo y puede cubrir {POS_NAME[p_from]}")
                     else:
                         reasons.append(f"{', '.join(who[:-1])} o {who[-1]} están de refuerzo y pueden cubrir {POS_NAME[p_from]}")
-                if score and (best is None or score > best["score"]):
+                if score and covers and (best is None or score > best["score"]):
                     best = {"date": ds, "shift": s, "employee_id": e["id"], "name": e["name"],
                             "from_position": p_from, "to_position": p_to, "score": score,
                             "covers": sorted(set(covers)), "reasons": reasons}
@@ -118,17 +140,22 @@ def suggest(year, month, assignments, employees, settings, today, only_encargado
                 if a["employee_id"] != e["id"] or a.get("locked"):
                     continue
                 s, p = a["shift"], a["position"]
-                need = staffing.get(s, {}).get(p, 0)
+                need = need_of(s, p)
                 covers = [emp_by_id[b["employee_id"]]["name"] for b in day
                           if b["shift"] == s and b["employee_id"] != e["id"] and b["employee_id"] in emp_by_id
                           and b["position"] != p and b["position"] != "otro"
-                          and count[(s, b["position"])] > staffing.get(s, {}).get(b["position"], 0)
+                          and count[(s, b["position"])] > need_of(s, b["position"])
                           and emp_by_id[b["employee_id"]]["positions"].get(p) in ("principal", "suplente")]
+                libres_cover = free_covers(day, ds, s, p)
                 if count[(s, p)] > need:
                     reason = f"es refuerzo de {POS_NAME[p]}: sale de la lista sin dejar hueco"
                 elif covers:
                     who = sorted(set(covers))
                     reason = f"{' o '.join(who)} {'está' if len(who) == 1 else 'están'} de refuerzo y {'puede' if len(who) == 1 else 'pueden'} cubrir {POS_NAME[p]}"
+                elif libres_cover:
+                    who = sorted(set(libres_cover))
+                    covers = who
+                    reason = f"{' o '.join(who)} {'está' if len(who) == 1 else 'están'} libre y le sobran libres: puede cubrir {POS_NAME[p]}"
                 else:
                     continue
                 out.append({"date": ds, "shift": s, "employee_id": e["id"], "name": e["name"], "from_position": p,
@@ -240,6 +267,44 @@ def special_hours(start, end, cl):
     return out
 
 
+def expand_special_days(rows, start, end):
+    """Días especiales (refuerzos) que tocan el rango -> {(fecha, turno): pisteros_extra}."""
+    start, end = parse_date(start), parse_date(end)
+    out = {}
+    for r in rows:
+        dates = []
+        if r.get("yearly"):
+            for y in range(start.year - 1, end.year + 2):
+                try:
+                    dates.append(parse_date(f"{y}{r['date'][4:]}"))
+                except ValueError:
+                    continue
+        else:
+            dates.append(parse_date(r["date"]))
+        for d in dates:
+            if start <= d <= end and int(r.get("extra_pisteros") or 0) > 0:
+                key = (iso(d), r["shift"])
+                out[key] = out.get(key, 0) + int(r["extra_pisteros"])
+    return out
+
+
+def staffing_for(staffing, extras, d, shift):
+    """Dotación de ese turno ese día: la normal + pisteros extra si es día especial."""
+    need = dict(staffing.get(shift, {}))
+    n = (extras or {}).get((d, shift), 0)
+    if n:
+        need["pistero"] = need.get("pistero", 0) + n
+    return need
+
+
+def extras_json(extras):
+    """{fecha: {turno: n}} para el frontend."""
+    out = {}
+    for (d, s), n in (extras or {}).items():
+        out.setdefault(d, {})[s] = n
+    return out
+
+
 def closed_days(special):
     return {d for d, v in special.items() if len(v) == 3 and all(x is None for x in v.values())}
 
@@ -300,7 +365,7 @@ def shift_blocks(seq):
     return blocks
 
 
-def analyze(year, month, assignments, employees, licenses, settings, closures=()):
+def analyze(year, month, assignments, employees, licenses, settings, closures=(), extras=None):
     """Valida el mes y arma el reporte privado del admin.
 
     `assignments` puede incluir días anteriores al mes (historial) para evaluar continuidad.
@@ -339,15 +404,24 @@ def analyze(year, month, assignments, employees, licenses, settings, closures=()
         if not day:
             issue("info", "Día sin armar", date=d)
             continue
-        for shift, need in staffing.items():
+        for shift in staffing:
             if special.get(d, {}).get(shift, "") is None:
                 if any(a["shift"] == shift for a in day):
                     issue("warn", f"Turno {SHIFT_NAME[shift].lower()} cerrado y tiene gente asignada", date=d, shift=shift)
                 continue
-            for pos, n in need.items():
+            need = staffing_for(staffing, extras, d, shift)
+            for pos in POS_NAME:
+                if pos == "otro":
+                    continue
+                n = need.get(pos, 0)
                 have = sum(1 for a in day if a["shift"] == shift and a["position"] == pos)
                 if have < n:
                     issue("warn", f"Falta {POS_NAME[pos]} ({have}/{n})", date=d, shift=shift, position=pos)
+                elif have > n:
+                    # nunca 2 en el spot; pisteros de más sólo en días especiales
+                    level = "error" if pos == "shop" else "warn"
+                    issue(level, f"Sobra {POS_NAME[pos]} ({have}/{n})" + ("" if pos == "shop" else ": refuerzo sólo en días especiales"),
+                          date=d, shift=shift, position=pos)
         per_emp = defaultdict(list)
         for a in day:
             per_emp[a["employee_id"]].append(a)
@@ -361,6 +435,8 @@ def analyze(year, month, assignments, employees, licenses, settings, closures=()
                 issue("warn", f"{name} cubre {POS_NAME[a['position']]} (no es su puesto)", date=d, shift=a["shift"], employee_id=a["employee_id"], position=a["position"])
             if emp and not emp["active"]:
                 issue("warn", f"{name} está dado de baja", date=d, shift=a["shift"], employee_id=a["employee_id"])
+            if emp and a["shift"] not in (emp.get("shifts") or SHIFT_START):
+                issue("warn", f"{name} no hace la {SHIFT_NAME[a['shift']].lower()}", date=d, shift=a["shift"], employee_id=a["employee_id"])
         for eid, lst in per_emp.items():
             shifts = [a["shift"] for a in lst]
             if len(shifts) != len(set(shifts)):
@@ -437,8 +513,12 @@ def analyze(year, month, assignments, employees, licenses, settings, closures=()
 
         if len(h4_dates) > max_h4:
             issue("warn", f"{emp['name']}: {len(h4_dates)} horas de 4 en el mes (máximo {max_h4})", employee_id=eid)
-        if emp["active"] and len(libres) > target:
-            issue("error", f"{emp['name']}: {len(libres)} libres, más de los {target} que le corresponden", employee_id=eid)
+        jornalero = bool(emp.get("jornalero"))
+        if jornalero:
+            pass   # jornalero: sin mínimo ni tope de libres
+        elif emp["active"] and len(libres) > target:
+            # sin refuerzos, si sobra gente alguien termina con libres de más: es aviso, no error
+            issue("warn", f"{emp['name']}: {len(libres)} libres, más de los {target} que le corresponden (sobra gente)", employee_id=eid)
         elif len(filled_days) == n_days - len(closed) and emp["active"] and len(libres) < target:
             issue("warn", f"{emp['name']}: {len(libres)} libres en el mes (le corresponden {target})", employee_id=eid)
 
@@ -464,13 +544,16 @@ def analyze(year, month, assignments, employees, licenses, settings, closures=()
             "max_horas4": max_h4,
             "turnos": counts,
             "semanas": week_rows,
+            "jornalero": jornalero,
+            "jornal_dias": int(emp.get("jornal_dias") or 0),
+            "trabajados": sum(1 for d in month_days if d in worked_days),
         })
 
     return {"issues": issues, "report": report, "weeks": [{"start": iso(a), "end": iso(b)} for a, b in weeks],
-            "special": special}
+            "special": special, "extra": extras_json(extras)}
 
 
-def day_layout(d, assignments, employees, licenses_days_map, staffing, cl=()):
+def day_layout(d, assignments, employees, licenses_days_map, staffing, cl=(), extras=None):
     """Estructura de un día como en la planilla en papel (usada por Excel y PDF)."""
     emp_by_id = {e["id"]: e for e in employees}
     day = [a for a in assignments if a["date"] == d]
@@ -495,7 +578,7 @@ def day_layout(d, assignments, employees, licenses_days_map, staffing, cl=()):
         labels = {"cajero": "CAJERO:" if shift == "T3" else "CAJERO PISTA:", "shop": "CAJERO SHOP:", "pistero": "PISTERO:",
                   "auxiliar": "AUXILIAR:", "otro": "OTRAS TAREAS:"}
         for pos in ["cajero", "shop", "pistero", "auxiliar", "otro"]:
-            need = staffing.get(shift, {}).get(pos, 0)
+            need = staffing_for(staffing, extras, d, shift).get(pos, 0)
             lst = names(shift, pos)
             if need == 0 and not lst:
                 continue

@@ -28,6 +28,9 @@ Desde el celular en el mismo wifi: `http://IP-DE-LA-PC:5000`.
 - **Cierres de la estación** (Configuración): por defecto 24/12 y 31/12 de 20:00 a 20:00 del día siguiente, todos
   los años. Ese día no se asigna a nadie ni cuenta como libre; la tarde del 24/12 y del 31/12 termina a las 20:00 y la noche
   del 26/12 y del 02/01 entra a las 20:00 (10 horas).
+- **Turnos fijos por empleado** (Empleados): qué turnos puede hacer cada uno (Belén sólo mañana, Soledad sólo tarde, Maycol nunca noche) y si es **jornalero**: cubre a los demás y no tiene tope de libres (Soledad 15 días por mes en el spot de la tarde; Fabiana cubre los libres de Silvia y Valeria). Nadie más pasa de sus 6 libres: si sobra gente, el encargado va a *Otros servicios* esos días.
+- **Sin refuerzos**: cada turno lleva exactamente su dotación (nunca 2 en el spot ni 3 pisteros). Los pisteros extra sólo en los **días especiales** que se cargan en Configuración (fecha, turno, cuántos, todos los años o una vez).
+- **Encargado fuera de planilla** (Configuración, apagado por defecto): al generar, el encargado queda en *Otros servicios* y no ocupa puesto; si falta alguien, el hueco queda marcado para que se ponga él a mano.
 - **Guardar / Publicar**: los empleados sólo ven los meses publicados.
 - **Exportar** semana o mes a PDF/Excel con el formato de la planilla (Turno 3, Turno 1, Turno 2, Libres)
   y compartir por WhatsApp (en el celular abre WhatsApp con el archivo adjunto).
