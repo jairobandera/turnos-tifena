@@ -237,6 +237,8 @@ table.grid th.sticky { background: #f6f7f9; z-index: 2; }
 @media (min-width: 700px) { .overlay { align-items: center; } .sheet { border-radius: 16px; } }
 
 .busy { position: fixed; inset: 0; z-index: 60; background: rgba(255, 255, 255, .8); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; font-weight: 700; text-align: center; padding: 20px; }
+.busy .countdown { font-size: 15px; color: var(--muted); }
+.busy .countdown b { font-size: 40px; color: var(--brand); display: block; line-height: 1.1; }
 .spinner { width: 46px; height: 46px; border: 5px solid #d5dde8; border-top-color: var(--brand); border-radius: 50%; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

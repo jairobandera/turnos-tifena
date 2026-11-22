@@ -57,12 +57,24 @@ const UI = {
     document.body.appendChild(t);
     setTimeout(() => t.remove(), ms);
   },
-  busy(msg) {
+  /** Pantalla de espera. Con `secs`, muestra una cuenta regresiva (ej. el tiempo del generador). */
+  busy(msg, secs) {
     const b = document.createElement("div");
     b.className = "busy";
-    b.innerHTML = `<div class="spinner"></div><div>${UI.esc(msg)}</div>`;
+    b.innerHTML = `<div class="spinner"></div><div>${UI.esc(msg)}</div>${secs ? `<div class="countdown"></div>` : ""}`;
     document.body.appendChild(b);
-    return () => b.remove();
+    let timer = null;
+    if (secs) {
+      const el = b.querySelector(".countdown");
+      const end = Date.now() + secs * 1000;
+      const tick = () => {
+        const left = Math.ceil((end - Date.now()) / 1000);
+        el.innerHTML = left > 0 ? `<b>${left}</b> s` : "Terminando, falta poco…";
+      };
+      tick();
+      timer = setInterval(tick, 250);
+    }
+    return () => { clearInterval(timer); b.remove(); };
   },
   /** Hoja inferior (celular) / modal (PC). Devuelve {el, close}. */
   sheet(html, onClose) {

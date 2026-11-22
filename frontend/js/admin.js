@@ -1,4 +1,4 @@
-// Panel del encargado: armar, editar, validar, guardar, publicar y exportar turnos.
+﻿// Panel del encargado: armar, editar, validar, guardar, publicar y exportar turnos.
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const SHIFT_START = { T3: -2, T1: 6, T2: 14 };
@@ -529,7 +529,7 @@ function reflow(a, toPosition, label) {
 
 /** Pide al servidor el reacomodo (no guarda nada) y muestra la vista previa. */
 async function simulate(a, toPosition, label, note) {
-  const stop = UI.busy(`Simulando desde el ${D.dm(D.parse(a.date))}… (puede tardar hasta ${A.settings.tiempo_generador || 25} segundos)`);
+  const stop = UI.busy(`Simulando desde el ${D.dm(D.parse(a.date))}…`, A.settings.tiempo_generador || 25);
   let r;
   try {
     const clean = A.assignments.map(({ _i, ...x }) => x);
@@ -589,7 +589,7 @@ function jornalesAlert() {
 }
 
 async function simulateRegen(desde, label, jornales) {
-  const stop = UI.busy(`Simulando desde el ${D.dm(D.parse(desde))}… (puede tardar hasta ${A.settings.tiempo_generador || 25} segundos)`);
+  const stop = UI.busy(`Simulando desde el ${D.dm(D.parse(desde))}…`, A.settings.tiempo_generador || 25);
   let r;
   try {
     const clean = A.assignments.map(({ _i, ...x }) => x);
@@ -717,7 +717,7 @@ async function buildNextMonth() {
   if (!A.analysis.issues.some((i) => i.msg === "Día sin armar")) {
     return UI.toast(`${name} ya estaba armado completo`, 4000);
   }
-  const stop = UI.busy(`Armando ${name}… (puede tardar hasta ${A.settings.tiempo_generador || 25} segundos)`);
+  const stop = UI.busy(`Armando ${name}…`, A.settings.tiempo_generador || 25);
   try {
     const clean = A.assignments.map(({ _i, ...a }) => a);
     const r = await API.post("/api/admin/generate", { year: A.year, month: A.month, mode: "completar", assignments: clean });
@@ -742,7 +742,7 @@ function generateDialog() {
     <div class="sub">Se toman como punto de partida los turnos ya armados (rotación, bloques de 4, horas de 4 y libres) y se arma de ahí en adelante.</div>
     <form id="gen-form" class="opts">
       <label class="field">Desde el día<input type="date" name="desde" value="${desde}" min="${D.iso(first)}" max="${D.iso(last)}" required></label>
-      <label class="opt"><span><input type="radio" name="mode" value="completar" checked> Completar sólo los días vacíos<br><small>Lo que ya está armado no se toca.</small></span></label>
+      <label class="opt"><span><input type="radio" name="mode" value="completar" checked> Completar días vacíos y puestos sin cubrir<br><small>Lo ya armado no se cambia; sólo se agrega gente donde falta (primero quien tiene libres de más).</small></span></label>
       <label class="opt"><span><input type="radio" name="mode" value="rehacer"> Rehacer desde esa fecha<br><small>Borra y vuelve a armar, salvo lo que tenga 🔒.</small></span></label>
       ${hasData ? "" : `<div class="alert info">El mes está vacío: se arma completo.</div>`}
       <div class="actions"><button type="button" class="btn" data-close>Cancelar</button><button class="btn accent">⚙️ Generar</button></div>
@@ -753,13 +753,16 @@ function generateDialog() {
     const f = new FormData(e.target);
     s.close();
     const secs = A.settings.tiempo_generador || 25;
-    const stop = UI.busy(`Armando los turnos… (puede tardar hasta ${secs} segundos)`);
+    const stop = UI.busy("Armando los turnos…", secs);
     try {
       const clean = A.assignments.map(({ _i, ...a }) => a);
       const r = await API.post("/api/admin/generate", { year: A.year, month: A.month, desde: f.get("desde"), mode: f.get("mode"), assignments: clean });
       pushUndo();
       A.assignments = r.assignments;
       A.analysis = r.analysis;
+      if (!r.generated_days.length) {
+        r.msgDone = `No había días vacíos: se cubrieron ${r.reparados || 0} puesto(s) sin gente con quienes tenían libres de más. Revisalo y tocá <b>Guardar</b>.`;
+      }
       A.lastGen = r;
       A.dirty = true;
       const weeks = D.weeksOfMonth(A.year, A.month);

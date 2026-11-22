@@ -69,10 +69,24 @@ def generate(year, month, employees, assignments, licenses, settings, desde=None
     # un día está "armado" si tiene alguien en un puesto; las "otras tareas" solas no cuentan
     staffed = {d for d, lst in by_day.items() if any(a["position"] != "otro" for a in lst)}
     if mode == "completar":
-        free = [d for d in month_days if d >= iso(desde) and d not in staffed]
+        # los días con la estación cerrada no son "días vacíos"
+        cerrados = closed_days(special_hours(first, last, closures))
+        free = [d for d in month_days if d >= iso(desde) and d not in staffed and d not in cerrados]
     else:
         free = [d for d in month_days if d >= iso(desde)]
+    fix_days = {d for d in month_days if d >= iso(desde)}   # días donde se pueden cubrir puestos vacíos
     if not free:
+        if mode == "completar":
+            # no hay días vacíos: sólo cubrir los puestos que quedaron sin gente en días ya armados
+            res = {"ok": True, "assignments": [dict(a) for a in assignments if a["date"] in month_days],
+                   "faltantes": [], "generated_days": [], "estricto": True}
+            hist = [a for a in assignments if a["date"] < iso(first)]
+            emps_c = [e for e in employees if e["active"]]
+            res["holes"] = _find_holes(res["assignments"], fix_days, settings, extras or {}, closures, year, month)
+            if not res["holes"]:
+                return {"ok": False, "msg": "No hay días vacíos ni puestos sin cubrir desde esa fecha."}
+            _repair_holes(res, year, month, hist, emps_c, licenses, settings, closures, extras or {}, fix_days)
+            return res
         return {"ok": False, "msg": "No hay días vacíos para generar desde esa fecha."}
     free_set = set(free)
     # se mantienen las "otras tareas" que puso el encargado a mano (las "Otros servicios" automáticas se rehacen)
@@ -141,10 +155,30 @@ def generate(year, month, employees, assignments, licenses, settings, desde=None
     kept = [a for a in assignments if a["date"] in month_days and a["date"] not in free_set]
     result["assignments"] = kept + result["assignments"]
     result["generated_days"] = free
-    if result.get("holes"):
+    # repaso final: puestos vacíos en todo lo que va desde "desde" (días nuevos y ya armados)
+    result["holes"] = _find_holes(result["assignments"], fix_days, settings, extras or {}, closures, year, month)
+    if result["holes"]:
         hist = [a for a in assignments if a["date"] < iso(first)]
-        _repair_holes(result, year, month, hist, emps, licenses, settings, closures, extras or {}, free_set)
+        _repair_holes(result, year, month, hist, emps, licenses, settings, closures, extras or {}, fix_days)
     return result
+
+
+def _find_holes(A, days_set, settings, extras, closures, year, month):
+    """Puestos sin cubrir: [(fecha, turno, puesto, cuántos faltan)]."""
+    from rules import staffing_for as need_for
+    special = special_hours(*month_bounds(year, month), closures)
+    count = defaultdict(int)
+    for a in A:
+        count[(a["date"], a["shift"], a["position"])] += 1
+    holes = []
+    for d in sorted(days_set):
+        for s in SH:
+            if special.get(d, {}).get(s, "") is None:
+                continue
+            for p, n in need_for(settings["staffing"], extras, d, s).items():
+                if count[(d, s, p)] < n:
+                    holes.append((d, s, p, n - count[(d, s, p)]))
+    return holes
 
 
 def _repair_holes(result, year, month, hist, emps, licenses, settings, closures, extras, free_set):
@@ -163,15 +197,16 @@ def _repair_holes(result, year, month, hist, emps, licenses, settings, closures,
                 and d not in lic.get(e["id"], ()) and special.get(d, {}).get(s, "") is not None
                 and not e.get("jornalero") and not e.get("fuera"))
 
-    def rest_ok(eid, extra):
-        tl = employee_timeline(hist + A + [extra], closures).get(eid, [])
+    def rest_ok(eid, extra, remove=None):
+        base = [a for a in A if a is not remove]
+        tl = employee_timeline(hist + base + [extra], closures).get(eid, [])
         ev = rest_events(tl)
         if any(k == "pegado" for k, *_ in ev):
             return False
         first, last = month_bounds(year, month)
         return sum(1 for k, d, *_ in ev if k == "hora4" and iso(first) <= d <= iso(last)) <= max_h4
 
-    still = []
+    still, fixed = [], 0
     for d, s, p, n in result["holes"]:
         for _ in range(n):
             if d not in free_set:
@@ -207,8 +242,32 @@ def _repair_holes(result, year, month, hist, emps, licenses, settings, closures,
                             break
                     if done:
                         break
+            # 3) cambio de turno: X (ese día en otro turno, sabe hacer p en s) pasa al hueco; Y (libres de más) ocupa el lugar de X
+            #    ej. falta pistero de noche y Maycol (no hace noches) tiene libres de más: un pistero de la tarde pasa a la noche
             if not done:
+                for a in [a for a in A if a["date"] == d and a["shift"] != s and a["position"] != "otro" and not a.get("locked")]:
+                    x = by_id.get(a["employee_id"])
+                    if not x or not can(x, d, s, p):
+                        continue
+                    moved = {**a, "shift": s, "position": p}
+                    if not rest_ok(x["id"], moved, remove=a):
+                        continue
+                    for eid in spare:
+                        y = by_id.get(eid)
+                        new = {"date": d, "shift": a["shift"], "position": a["position"], "employee_id": eid,
+                               "ord": 9, "locked": False, "note": ""}
+                        if y and eid not in busy and can(y, d, a["shift"], a["position"]) and rest_ok(eid, new):
+                            a["shift"], a["position"] = s, p
+                            A.append(new)
+                            done = True
+                            break
+                    if done:
+                        break
+            if done:
+                fixed += 1
+            else:
                 still.append((d, s, p))
+    result["reparados"] = fixed
     need_ok = lambda d, s, p: need_for(settings["staffing"], extras, d, s).get(p, 0)
     result["faltantes"] = [f"{fmt_day(d)} {SHIFT_NAME[s]}: falta {POS_NAME[p]} x1" for d, s, p in still
                            if sum(1 for a in A if a["date"] == d and a["shift"] == s and a["position"] == p) < need_ok(d, s, p)]
