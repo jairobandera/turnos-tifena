@@ -85,9 +85,14 @@ def generate(year, month, employees, assignments, licenses, settings, desde=None
             hist = [a for a in assignments if a["date"] < iso(first)]
             emps_c = [e for e in employees if e["active"]]
             res["holes"] = _find_holes(res["assignments"], fix_days, settings, extras or {}, closures, year, month)
-            if not res["holes"]:
-                return {"ok": False, "msg": "No hay días vacíos ni puestos sin cubrir desde esa fecha."}
-            _repair_holes(res, year, month, hist, emps_c, licenses, settings, closures, extras or {}, fix_days)
+            if res["holes"]:
+                _repair_holes(res, year, month, hist, emps_c, licenses, settings, closures, extras or {}, fix_days)
+            else:
+                res["reparados"] = 0
+            res["equilibrados"] = _balance_libres(res, year, month, hist, emps_c, licenses, settings, closures,
+                                                  extras or {}, fix_days)
+            if not res.get("reparados") and not res["equilibrados"]:
+                return {"ok": False, "msg": "No hay días vacíos, puestos sin cubrir ni libres para emparejar desde esa fecha."}
             return res
         return {"ok": False, "msg": "No hay días vacíos para generar desde esa fecha."}
     free_set = set(free)
@@ -164,10 +169,113 @@ def generate(year, month, employees, assignments, licenses, settings, desde=None
     result["generated_days"] = free
     # repaso final: puestos vacíos en todo lo que va desde "desde" (días nuevos y ya armados)
     result["holes"] = _find_holes(result["assignments"], fix_days, settings, extras or {}, closures, year, month)
+    hist = [a for a in assignments if a["date"] < iso(first)]
     if result["holes"]:
-        hist = [a for a in assignments if a["date"] < iso(first)]
         _repair_holes(result, year, month, hist, emps, licenses, settings, closures, extras or {}, fix_days)
+    # repaso de equilibrio: quien trabajó un libre suyo y quien tiene libres de más se intercambian turnos
+    result["equilibrados"] = _balance_libres(result, year, month, hist, emps, licenses, settings, closures,
+                                             extras or {}, fix_days)
     return result
+
+
+def _balance_libres(result, year, month, hist, emps, licenses, settings, closures, extras, fix_days):
+    """Mientras haya alguien con MENOS libres de los que le tocan (A) y alguien con MÁS (B), busca un día en que
+    A trabaja y B está libre para pasarle el turno a B (directo, o con un enroque por medio de un tercero C).
+    Sólo si se cumplen todas las reglas. No toca noches ni lo fijado con candado. Devuelve cuántos cambios hizo."""
+    from rules import analyze, rest_events, employee_timeline
+    A = result["assignments"]
+    by_id = {e["id"]: e for e in emps}
+    lic = license_days(licenses)
+    first, last = month_bounds(year, month)
+    special = special_hours(first, last, closures)
+    max_h4 = int(settings.get("max_horas4", 2))
+    max_seg = int(settings.get("max_dias_seguidos", 6))
+
+    def can(e, d, s, p):
+        return (e and e["active"] and e["positions"].get(p) in ("principal", "suplente") and s in (e.get("shifts") or SH)
+                and d not in lic.get(e["id"], ()) and special.get(d, {}).get(s, "") is not None
+                and not e.get("jornalero") and not e.get("fuera"))
+
+    def faults(eid, items):
+        """Cuántas reglas rompe eid con estas asignaciones (turnos pegados, horas de 4 de más,
+        días seguidos de más, trabajar el día después de terminar las noches)."""
+        tl = employee_timeline(items, closures).get(eid, [])
+        ev = rest_events(tl)
+        n = 100 * sum(1 for k, *_ in ev if k == "pegado")
+        n += 10 * max(0, sum(1 for k, d, *_ in ev if k == "hora4" and iso(first) <= d <= iso(last)) - max_h4)
+        worked = {t[2] for t in tl}
+        run = 0
+        for d in date_range(first - timedelta(days=max_seg + 1), last):
+            run = run + 1 if iso(d) in worked else 0
+            if run > max_seg and iso(d) >= iso(first):
+                n += 1
+        nights = {t[2] for t in tl if t[3] == "T3"}
+        for d in nights:
+            nxt = iso(parse_date(d) + timedelta(days=1))
+            if nxt not in nights and nxt in worked and special.get(nxt, {}).get("T3", "") is not None:
+                n += 10
+        return n
+
+    def mine(eid, base):
+        return [a for a in hist + base if a["employee_id"] == eid]
+
+    def rules_ok(eid, items):
+        """El cambio vale si a esa persona no la deja peor de lo que estaba."""
+        return faults(eid, items) <= faults(eid, mine(eid, A))
+
+    changes = 0
+    for _ in range(200):
+        rep = analyze(year, month, hist + A, emps, licenses, settings, closures, extras)["report"]
+        short = [r["employee_id"] for r in rep if not r["jornalero"] and r["libres"] < r["libres_objetivo"]]
+        spare = [r["employee_id"] for r in sorted(rep, key=lambda r: r["libres_objetivo"] - r["libres"])
+                 if not r["jornalero"] and r["libres"] > r["libres_objetivo"]]
+        if not short or not spare:
+            break
+        done = False
+        for a_id in short:
+            for a in [x for x in A if x["employee_id"] == a_id and x["date"] in fix_days and x["shift"] != "T3"
+                      and x["position"] != "otro" and not x.get("locked")]:
+                d, s, p = a["date"], a["shift"], a["position"]
+                busy = {x["employee_id"] for x in A if x["date"] == d}
+                rest = [x for x in A if x is not a]
+                if not rules_ok(a_id, mine(a_id, rest)):
+                    continue
+                for b_id in spare:
+                    if b_id in busy:
+                        continue
+                    b = by_id.get(b_id)
+                    # 1) directo: B hace el turno de A
+                    nb = {**a, "employee_id": b_id, "locked": False}
+                    if can(b, d, s, p) and rules_ok(b_id, mine(b_id, rest) + [nb]):
+                        A.remove(a)
+                        A.append(nb)
+                        done = True
+                        break
+                    # 2) enroque: C (ese día, mismo u otro turno, no noche) pasa al lugar de A y B ocupa el de C
+                    for cx in [x for x in rest if x["date"] == d and x["shift"] != "T3" and x["position"] != "otro"
+                               and not x.get("locked")]:
+                        c = by_id.get(cx["employee_id"])
+                        if not can(c, d, s, p) or not can(b, d, cx["shift"], cx["position"]):
+                            continue
+                        nc = {**cx, "shift": s, "position": p}
+                        nb = {**cx, "employee_id": b_id, "locked": False}
+                        base = [x for x in rest if x is not cx]
+                        if rules_ok(c["id"], mine(c["id"], base) + [nc]) and rules_ok(b_id, mine(b_id, base) + [nb]):
+                            A.remove(a)
+                            A.remove(cx)
+                            A.extend([nc, nb])
+                            done = True
+                            break
+                    if done:
+                        break
+                if done:
+                    break
+            if done:
+                break
+        if not done:
+            break
+        changes += 1
+    return changes
 
 
 def _plan_pistero_nights(emps, days, free_set, by_day, locked, lic, closed_shift, B):

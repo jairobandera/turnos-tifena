@@ -761,7 +761,10 @@ function generateDialog() {
       A.assignments = r.assignments;
       A.analysis = r.analysis;
       if (!r.generated_days.length) {
-        r.msgDone = `No había días vacíos: se cubrieron ${r.reparados || 0} puesto(s) sin gente con quienes tenían libres de más. Revisalo y tocá <b>Guardar</b>.`;
+        const partes = [];
+        if (r.reparados) partes.push(`se cubrieron ${r.reparados} puesto(s) sin gente`);
+        if (r.equilibrados) partes.push(`se hicieron ${r.equilibrados} intercambio(s) para emparejar libres`);
+        r.msgDone = `No había días vacíos: ${partes.join(" y ") || "no hubo nada para cambiar"}. Revisalo y tocá <b>Guardar</b>.`;
       }
       A.lastGen = r;
       A.dirty = true;
