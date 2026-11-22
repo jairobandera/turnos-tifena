@@ -57,7 +57,7 @@ def next_allowed(shift, allowed):
 
 
 def generate(year, month, employees, assignments, licenses, settings, desde=None, mode="completar", time_limit=None,
-             closures=(), extras=None):
+             closures=(), extras=None, jornales=None):
     """mode='completar': sólo llena días vacíos >= desde (los armados quedan fijos).
     mode='rehacer'  : rehace todos los días >= desde, manteniendo las asignaciones con candado."""
     first, last = month_bounds(year, month)
@@ -75,13 +75,20 @@ def generate(year, month, employees, assignments, licenses, settings, desde=None
     if not free:
         return {"ok": False, "msg": "No hay días vacíos para generar desde esa fecha."}
     free_set = set(free)
-    locked = [a for a in assignments if a["date"] in free_set and (a["position"] == "otro" or (mode == "rehacer" and a.get("locked")))]
+    # se mantienen las "otras tareas" que puso el encargado a mano (las "Otros servicios" automáticas se rehacen)
+    manual_task = lambda a: a["position"] == "otro" and (a.get("locked") or (a.get("note") or "") != OTROS_SERVICIOS)
+    locked = [a for a in assignments if a["date"] in free_set and (manual_task(a) or (mode == "rehacer" and a.get("locked")))]
     prefer = {(a["employee_id"], a["date"], a["shift"], a["position"]) for a in assignments if a["date"] in free_set}
 
     # el modelo ve siempre el mes completo (para contar bien los libres) + historial previo
     start = min(parse_date(free[0]) - timedelta(days=HISTORY_DAYS), first)
     days = [iso(d) for d in date_range(start, last)]
     emps = [e for e in employees if e["active"]]
+    if jornales:
+        # jornales sólo para este mes (ej. lo que sugiere el aviso para Soledad); 0 = sólo lo necesario
+        jornales = {int(k): int(v) for k, v in jornales.items()}
+        emps = [{**e, "jornal_dias": jornales[e["id"]] if jornales[e["id"]] > 0 else 0} if e["id"] in jornales else e
+                for e in emps]
     if settings.get("encargado_fuera"):
         # el encargado queda fuera de la planilla: sus días de trabajo van a "Otros servicios"
         emps = [{**e, "fuera": True} if "otro" in e["positions"] else e for e in emps]
@@ -212,15 +219,7 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
                             xs.append(xv)
                             continue
                         if p == "otro" and not is_locked:
-                            # encargado en planilla: si sobra gente, va a "Otros servicios" en vez de dar libres de más
-                            if encargado and s == fuera_shift and not night_bonus:
-                                xv = m.NewBoolVar("")
-                                x[ei, t, s, p] = xv
-                                xs.append(xv)
-                                pen.append((W_OTROS, xv))
-                                if (eid, d, s, p) in prefer:
-                                    pen.append((-W_KEEP, xv))
-                            continue
+                            continue   # "otras tareas" sólo las pone el encargado a mano (o con "fuera de planilla")
                         # "ocasional" (ej. Soledad en limpieza) sólo si el encargado lo aplicó/fijó
                         if not is_locked and (lvl in (None, "ocasional") or s not in allowed
                                               or staffing_for(staffing, extras, d, s).get(p, 0) == 0):
@@ -430,9 +429,11 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
                 pen.append((W_LIBRES_FALTAN, under))
                 if step == 1:
                     shortfalls.append(under)   # le faltan 2 libres o más
-            over = m.NewIntVar(0, 62, "")
-            m.Add(over >= off_sum - target)
-            pen.append((W_LIBRES_EXCESO, over))
+            # libres de más (sólo si sobra gente): parejos, el segundo de más cuesta más que el primero
+            for step in range(0, 4):
+                over = m.NewIntVar(0, 62, "")
+                m.Add(over >= off_sum - target - step)
+                pen.append((W_LIBRES_EXCESO, over))
 
         # --- días seguidos ---
         K = max_seg + 1

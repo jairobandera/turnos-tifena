@@ -286,7 +286,7 @@ def admin_generate():
     assigns = with_history(c, year, month, current)
     res = scheduler.generate(year, month, db.get_employees(c), assigns, db.get_licenses(c), db.get_settings(c),
                              desde=data.get("desde"), mode=mode, closures=month_closures(c, year, month),
-                             extras=month_extras(c, year, month))
+                             extras=month_extras(c, year, month), jornales=data.get("jornales"))
     if not res["ok"]:
         return bad(res["msg"], 422)
     res["analysis"] = analysis(c, year, month, with_history(c, year, month, res["assignments"]))

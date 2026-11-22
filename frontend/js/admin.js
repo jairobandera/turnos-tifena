@@ -175,17 +175,21 @@ function renderTurnos(keepScroll) {
     if (!g.estricto) alerts += `<div class="alert">No se pudo respetar 100% el 4-4-4 de cajeros; mirá los avisos de cada día.</div>`;
   }
   if (empty) alerts += `<div class="alert info">${empty} día(s) del mes sin armar. Usá <b>Generar</b> para completarlos.</div>`;
-  const sugs = (A.analysis && A.analysis.suggestions) || [];
-  if (sugs.length) {
-    const names = [...new Set(sugs.map((x) => x.name))].join(", ");
-    alerts += `<div class="alert info suggest-alert">💡 <b>${sugs.length} sugerencia${sugs.length > 1 ? "s" : ""}</b> para ${UI.esc(names)}: días en que conviene sacar a alguien de la lista (limpieza u otras tareas).
-      <button class="btn small" id="b-sugs">Ver</button></div>`;
-  }
+  alerts += jornalesAlert();
   if (general.length) {
     alerts += `<details class="alert"><summary><b>${general.length} aviso(s) del mes</b> (libres, horas de 4)</summary><ul style="margin:6px 0 0;padding-left:18px">${general.map((i) => `<li>${UI.esc(i.msg)}</li>`).join("")}</ul></details>`;
   }
   $("#m-alerts").innerHTML = alerts;
-  if ($("#b-sugs")) $("#b-sugs").onclick = showSuggestions;
+  $$("[data-jornal-sim]").forEach((b) => {
+    b.onclick = () => {
+      const eid = Number(b.dataset.jornalSim);
+      const n = A.jornalPlan[eid];
+      const [first, last] = D.monthBounds(A.year, A.month);
+      const t = D.today();
+      const desde = t > D.iso(first) && t <= D.iso(last) ? t : D.iso(first);
+      simulateRegen(desde, `${A.emps.get(eid).name} con ${n} jornales este mes`, { [eid]: n });
+    };
+  });
 
   // pestañas de semana
   const weeks = D.weeksOfMonth(A.year, A.month);
@@ -200,7 +204,6 @@ function renderTurnos(keepScroll) {
     byDay.get(a.date).push(a);
   });
   const ctx = { emps: A.emps, staffing: A.settings.staffing, licDays: A.licDays, editable: true, highlight: A.highlight, issues,
-    suggestions: (A.analysis && A.analysis.suggestions) || [],
     special: (A.analysis && A.analysis.special) || {},
     extra: (A.analysis && A.analysis.extra) || {},
     canTask: A.me && canTask(A.me.employee_id) };
@@ -555,12 +558,42 @@ async function checkNextMonthLicenses() {
 }
 
 /** Simula rehacer desde una fecha (ej. por una licencia nueva) y muestra la vista previa. */
-async function simulateRegen(desde, label) {
+/** Aviso con la cuenta del mes: cuántos jornales necesita cada jornalero (Soledad, Fabiana) para que den los turnos. */
+function jornalesAlert() {
+  const bal = (A.analysis && A.analysis.balance) || [];
+  let html = "";
+  A.jornalPlan = {};
+  for (const g of bal) {
+    if (!g.jornaleros.length && !g.faltan && !g.sobran) continue;
+    const j = g.jornaleros[0];
+    const cuenta = `<small class="muted">Hay ${g.demanda} turnos de ${g.label} para cubrir; los fijos con sus libres hacen ${g.fijos}.</small>`;
+    if (!j) {
+      if (g.faltan) html += `<div class="alert error">Faltan ${g.faltan} turnos de ${g.label} este mes y no hay jornalero para cubrirlos. ${cuenta}</div>`;
+      continue;
+    }
+    const need = Math.min(g.faltan, j.max);
+    if (g.faltan > j.max) {
+      html += `<div class="alert error">📋 Faltan ${g.faltan} turnos de ${g.label}: aunque ${UI.esc(j.name)} trabaje todos los días (${j.max}) no alcanza. ${cuenta}</div>`;
+    } else if (g.sobran) {
+      html += `<div class="alert">📋 Este mes sobra gente en ${g.label}: ${UI.esc(j.name)} no hace falta (0 jornales) y aun así sobran ${g.sobran} turnos, que quedan como libres de más (o Maycol en Otros servicios, a mano). ${cuenta}</div>`;
+    }
+    // jornalero en "sólo lo necesario" (ej. Fabiana): ya cubre solo, no hace falta sugerir
+    if (g.faltan <= j.max && j.configurados && need !== j.configurados) {
+      A.jornalPlan[j.employee_id] = need;
+      const jj = `${need} jornal${need === 1 ? "" : "es"}`;
+      html += `<div class="alert info suggest-alert">📋 Para que den los turnos, <b>${UI.esc(j.name)}</b> debería hacer <b>${jj}</b> (${need * 8} horas) este mes (tiene configurados ${j.configurados}). ${cuenta}
+        <button class="btn small" data-jornal-sim="${j.employee_id}">🔎 Simular con ${jj}</button></div>`;
+    }
+  }
+  return html;
+}
+
+async function simulateRegen(desde, label, jornales) {
   const stop = UI.busy(`Simulando desde el ${D.dm(D.parse(desde))}… (puede tardar hasta ${A.settings.tiempo_generador || 25} segundos)`);
   let r;
   try {
     const clean = A.assignments.map(({ _i, ...x }) => x);
-    r = await API.post("/api/admin/generate", { year: A.year, month: A.month, desde, mode: "rehacer", assignments: clean });
+    r = await API.post("/api/admin/generate", { year: A.year, month: A.month, desde, mode: "rehacer", assignments: clean, jornales });
   } catch (err) {
     stop();
     return UI.toast("No se pudo simular: " + err.message, 5000);
@@ -833,19 +866,28 @@ function renderReport() {
   const rows = rep.map((r) => `<tr>
       <td class="sticky"><b>${UI.esc(r.name)}</b></td>
       <td class="num">${r.jornalero ? `<span class="muted">Jornalero · ${r.trabajados} días${r.jornal_dias ? ` (objetivo ${r.jornal_dias})` : ""}</span>` : `<span class="${clsLib(r)}">${r.libres}</span> / ${r.libres_objetivo}`}</td>
-      <td class="num"><span class="${clsH4(r.horas4, r.max_horas4)}">${r.horas4}</span> / ${r.max_horas4}</td>
+      <td class="num"><span class="${clsH4(r.horas4, r.max_horas4)}">${r.horas4}</span> / ${r.max_horas4}${r.horas4 ? ` <small class="muted">(${r.horas4 * 4} hs)</small>` : ""}</td>
       <td class="num">${r.licencia || ""}</td>
       <td class="num">${r.turnos.T1}</td><td class="num">${r.turnos.T2}</td><td class="num">${r.turnos.T3}</td>
       ${r.semanas.map((w) => `<td class="num">${w.libres} · <span class="${w.horas4 ? "meh" : ""}">${w.horas4}</span></td>`).join("")}
     </tr>`).join("");
+  // total de horas de 4 de todos: cantidad de veces x 4 horas
+  const totalH4 = rep.reduce((n, r) => n + r.horas4, 0);
+  const weekH4 = weeks.map((_, i) => rep.reduce((n, r) => n + (r.semanas[i] ? r.semanas[i].horas4 : 0), 0));
+  const totalRow = `<tr style="font-weight:700;background:#f6f7f9"><td class="sticky" style="background:#f6f7f9">TOTAL</td><td></td>
+      <td class="num">${totalH4} <small>(${totalH4 * 4} hs)</small></td><td></td><td></td><td></td><td></td>
+      ${weekH4.map((n) => `<td class="num">H4: ${n} <small>(${n * 4} hs)</small></td>`).join("")}</tr>`;
   el.innerHTML = `
     ${A.dirty ? `<div class="alert">Incluye cambios sin guardar.</div>` : ""}
     ${empty ? `<div class="alert">Hay ${empty} día(s) sin armar: cuentan como libres hasta que se armen.</div>` : ""}
+    <div class="summary">
+      <span class="pill">⏱️ Horas de 4 del mes: <b>${totalH4}</b> × 4 = <b>${totalH4 * 4} horas</b></span>
+    </div>
     <div class="card"><h3>${D.MONTHS[A.month - 1]} ${A.year}</h3>
     <div class="table-wrap"><table class="grid"><thead><tr>
       <th class="sticky">Empleado</th><th class="num">Libres del mes</th><th class="num">Horas de 4</th><th class="num">Días licencia</th>
       <th class="num">Mañanas</th><th class="num">Tardes</th><th class="num">Noches</th>${head}
-    </tr></thead><tbody>${rows}</tbody></table></div>
+    </tr></thead><tbody>${rows}${totalRow}</tbody></table></div>
     <p class="muted" style="font-size:13px">Libres en <span class="bad">rojo</span> = menos de los que le corresponden. Horas de 4 en <span class="bad">rojo</span> = pasó el máximo. Con licencia, los libres que le corresponden se calculan proporcionalmente.</p></div>`;
 }
 
@@ -1083,6 +1125,17 @@ async function renderConfig() {
   $("#staffing").innerHTML = `<table class="grid"><thead><tr><th>Puesto</th>${SHIFTS.map((x) => `<th class="num">${x.name}</th>`).join("")}</tr></thead><tbody>
     ${POSITIONS.map((p) => `<tr><td>${POS_NAME[p]}</td>${SHIFTS.map((x) => `<td class="num"><input class="input" type="number" min="0" max="9" style="width:70px" data-st="${x.key}|${p}" value="${s.staffing[x.key]?.[p] || 0}"></td>`).join("")}</tr>`).join("")}
     </tbody></table>`;
+  // botones de guardar: se resaltan cuando hay cambios sin guardar
+  const saveBtns = $$(".cfg-save", f);
+  const labels = saveBtns.map((b) => b.dataset.label || (b.dataset.label = b.textContent));
+  const setDirty = (dirty) => saveBtns.forEach((b, i) => {
+    b.classList.toggle("accent", dirty);
+    b.classList.toggle("primary", !dirty);
+    b.textContent = dirty ? "💾 Guardar cambios (sin guardar)" : labels[i];
+  });
+  setDirty(false);
+  f.oninput = () => setDirty(true);
+  f.onchange = () => setDirty(true);
   f.onsubmit = async (e) => {
     e.preventDefault();
     const body = {};
@@ -1096,7 +1149,8 @@ async function renderConfig() {
       A.settings = await API.put("/api/admin/settings", body);
       UI.toast(wasOut !== body.encargado_fuera
         ? "Guardado. Para que se aplique, volvé a generar el mes (Generar → Rehacer desde la fecha)."
-        : "Configuración guardada", 5000);
+        : "Configuración guardada ✔", 5000);
+      setDirty(false);
       scheduleAnalyze();
     } catch (err) {
       UI.toast(err.message, 4000);

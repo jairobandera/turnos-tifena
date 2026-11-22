@@ -305,6 +305,51 @@ def extras_json(extras):
     return out
 
 
+def staffing_balance(year, month, employees, licenses, settings, closures=(), extras=None):
+    """Cuenta del mes: cuántos turnos hay que cubrir y cuántos dan los fijos con sus libres.
+    De ahí sale cuántos jornales debería hacer cada jornalero (Soledad en pista/spot, Fabiana en auxiliares)."""
+    first, last = month_bounds(year, month)
+    special = special_hours(first, last, closures)
+    closed = closed_days(special)
+    open_days = [iso(d) for d in date_range(first, last) if iso(d) not in closed]
+    staffing = settings["staffing"]
+    lic = license_days(licenses)
+    fuera = settings.get("encargado_fuera")
+    groups = {"pista": {"pos": ("cajero", "shop", "pistero"), "label": "pista y spot"},
+              "aux": {"pos": ("auxiliar",), "label": "auxiliares"}}
+    out = []
+    for key, g in groups.items():
+        demand = 0
+        for d in open_days:
+            for s in ("T3", "T1", "T2"):
+                if special.get(d, {}).get(s, "") is None:
+                    continue
+                need = staffing_for(staffing, extras, d, s)
+                demand += sum(need.get(p, 0) for p in g["pos"])
+        supply, jornaleros = 0, []
+        for e in employees:
+            if not e["active"]:
+                continue
+            lvls = [e["positions"].get(p) for p in g["pos"]]
+            if not any(l in ("principal", "suplente") for l in lvls):
+                continue
+            if key == "aux" and any(e["positions"].get(p) in ("principal", "suplente") for p in groups["pista"]["pos"]):
+                continue   # cuenta en pista
+            if fuera and "otro" in e["positions"]:
+                continue   # encargado fuera de planilla
+            avail = [d for d in open_days if d not in lic.get(e["id"], ())]
+            if e.get("jornalero"):
+                jornaleros.append({"employee_id": e["id"], "name": e["name"], "configurados": int(e.get("jornal_dias") or 0),
+                                   "max": len(avail)})
+                continue
+            target = libres_target(int(settings.get("libres_objetivo", 6)), len(avail), len(open_days))
+            supply += max(0, len(avail) - target)
+        needed = demand - supply
+        out.append({"grupo": key, "label": g["label"], "demanda": demand, "fijos": supply, "faltan": max(0, needed),
+                    "sobran": max(0, -needed), "jornaleros": jornaleros})
+    return out
+
+
 def closed_days(special):
     return {d for d, v in special.items() if len(v) == 3 and all(x is None for x in v.values())}
 
@@ -568,7 +613,8 @@ def analyze(year, month, assignments, employees, licenses, settings, closures=()
         })
 
     return {"issues": issues, "report": report, "weeks": [{"start": iso(a), "end": iso(b)} for a, b in weeks],
-            "special": special, "extra": extras_json(extras)}
+            "special": special, "extra": extras_json(extras),
+            "balance": staffing_balance(year, month, employees, licenses, settings, closures, extras)}
 
 
 def day_layout(d, assignments, employees, licenses_days_map, staffing, cl=(), extras=None):

@@ -107,9 +107,9 @@
       <!-- CONFIG -->
       <section id="tab-config" hidden>
         <div id="pwd-alert"></div>
+        <form id="cfg-form">
         <div class="card">
           <h3>Reglas del generador</h3>
-          <form id="cfg-form">
             <div class="form-grid">
               <label class="field">Máximo de horas de 4 por mes (por empleado)<input type="number" min="0" name="max_horas4"></label>
               <label class="field">Libres por mes<input type="number" min="0" name="libres_objetivo"></label>
@@ -120,11 +120,15 @@
               <label class="field wide" style="flex-direction:row;align-items:center;gap:8px;color:var(--ink)"><input type="checkbox" name="encargado_fuera" style="width:20px;height:20px">
                 <span>Encargado fuera de planilla: al generar, sus días de trabajo quedan como <b>Otros servicios</b> y no ocupa puesto (si hace falta, se pone a mano en pista)</span></label>
             </div>
-            <h3 style="margin-top:16px">Dotación por turno</h3>
-            <div class="table-wrap" id="staffing"></div>
-            <div class="actionbar" style="margin-top:12px"><button class="btn primary">Guardar configuración</button></div>
-          </form>
+            <div class="actionbar" style="margin-top:14px"><button class="btn primary cfg-save">💾 Guardar reglas</button></div>
         </div>
+        <div class="card">
+            <h3>Dotación por turno</h3>
+            <p class="muted" style="margin-top:0">Cuánta gente lleva cada puesto en cada turno, todos los días.</p>
+            <div class="table-wrap" id="staffing"></div>
+            <div class="actionbar" style="margin-top:12px"><button class="btn primary cfg-save">💾 Guardar dotación</button></div>
+        </div>
+        </form>
         <div class="card">
           <h3>Días especiales (refuerzos)</h3>
           <p class="muted" style="margin-top:0">Feriados o días muy movidos: se agregan pisteros extra en ese turno. Fuera de estos días nunca hay refuerzos (ni 2 en el spot ni 3 pisteros).</p>
