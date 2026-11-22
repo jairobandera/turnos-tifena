@@ -196,6 +196,15 @@ function renderTurnos(keepScroll) {
   $("#weeks").innerHTML = weeks.map((w, i) => `<button data-w="${i}" class="${A.week === i ? "active" : ""}">${D.dm(D.parse(w.days[0]))} – ${D.dm(D.parse(w.days[w.days.length - 1]))}</button>`).join("")
     + `<button data-w="all" class="${A.week === "all" ? "active" : ""}">Mes completo</button>`;
   const days = A.week === "all" ? weeks.flatMap((w) => w.days) : weeks[A.week].days;
+  // botones para borrar la semana que se está viendo o el mes entero
+  const wk = A.week === "all" ? null : weeks[A.week];
+  $("#clear-actions").innerHTML = (wk
+    ? `<button class="btn small danger" data-clear="week">🗑️ Borrar esta semana (${D.dm(D.parse(wk.days[0]))} – ${D.dm(D.parse(wk.days[wk.days.length - 1]))})</button>`
+    : "") + `<button class="btn small danger" data-clear="month">🗑️ Borrar mes (${D.MONTHS[A.month - 1]})</button>`;
+  $("#clear-actions").onclick = (e) => {
+    const b = e.target.closest("[data-clear]");
+    if (b) clearDays(b.dataset.clear === "week" ? wk.days : weeks.flatMap((w) => w.days), b.dataset.clear);
+  };
 
   const byDay = new Map();
   A.assignments.forEach((a, i) => {
@@ -210,6 +219,28 @@ function renderTurnos(keepScroll) {
   $("#days").innerHTML = days.map((d) => renderDay(d, byDay.get(d) || [], ctx)).join("");
   initSortables();
   if (keepScroll) window.scrollTo(0, y);
+}
+
+/** Borra los turnos de esos días (en el editor; se guarda recién con Guardar y se puede deshacer). */
+async function clearDays(dayList, kind) {
+  const set = new Set(dayList);
+  const count = A.assignments.filter((a) => set.has(a.date)).length;
+  if (!count) return UI.toast("No hay turnos para borrar ahí");
+  const what = kind === "week"
+    ? `la semana del <b>${D.dm(D.parse(dayList[0]))} al ${D.dm(D.parse(dayList[dayList.length - 1]))}</b>`
+    : `<b>todo ${D.MONTHS[A.month - 1]} ${A.year}</b>`;
+  const ok = await UI.confirm(kind === "week" ? "Borrar semana" : "Borrar todo el mes",
+    `¿Seguro que querés borrar ${what}? Se borran <b>${count} turnos</b> (también los fijados con 🔒 y las otras tareas).<br><br>
+     Después podés acomodar a mano a quien quieras y tocar <b>Generar → Completar</b> para que arme lo vacío.
+     No se pierde nada hasta que toques <b>Guardar</b>, y se puede deshacer.`,
+    "Sí, borrar", true);
+  if (!ok) return;
+  pushUndo();
+  A.assignments = A.assignments.filter((a) => !set.has(a.date));
+  A.lastGen = { msgDone: `Se borraron ${count} turnos. Acomodá lo que quieras y tocá <b>Generar → Completar</b> (o <b>Guardar</b> para dejarlo así).`, faltantes: [], estricto: true };
+  const first = dayList[0];
+  A.suggestedDesde = first;
+  markDirty();
 }
 
 function initSortables() {
