@@ -854,6 +854,19 @@ function download(blob, name) {
 
 // ============ reporte ============
 
+/** Mes armado a medias (ej. noviembre: sólo del 16 al 30): los libres se cuentan sobre los días armados. */
+function partialMonthNote(empty) {
+  const dates = [...new Set(A.assignments.map((a) => a.date))].sort();
+  const [first, last] = D.monthBounds(A.year, A.month);
+  const total = D.range(first, last).length;
+  const armados = total - empty;
+  const obj = A.settings.libres_objetivo;
+  if (!dates.length) return `<div class="alert">Este mes todavía no está armado.</div>`;
+  return `<div class="alert">⚠️ Este mes está armado sólo en ${armados} de ${total} días (del ${D.dm(D.parse(dates[0]))} al ${D.dm(D.parse(dates[dates.length - 1]))}).
+    Por eso los libres que corresponden se calculan sobre esos días: ${obj} × ${armados}/${total} ≈ <b>${Math.round((obj * armados) / total)}</b>, no ${obj}.
+    Si esos días se cargaron a mano (por ejemplo, desde la planilla en papel), los libres son los que figuraban ahí: el generador no los repartió.</div>`;
+}
+
 function renderReport() {
   const el = $("#report");
   if (!A.analysis) { el.innerHTML = `<div class="empty">Sin datos</div>`; return; }
@@ -879,7 +892,7 @@ function renderReport() {
       ${weekH4.map((n) => `<td class="num">H4: ${n} <small>(${n * 4} hs)</small></td>`).join("")}</tr>`;
   el.innerHTML = `
     ${A.dirty ? `<div class="alert">Incluye cambios sin guardar.</div>` : ""}
-    ${empty ? `<div class="alert">Hay ${empty} día(s) sin armar: cuentan como libres hasta que se armen.</div>` : ""}
+    ${empty ? partialMonthNote(empty) : ""}
     <div class="summary">
       <span class="pill">⏱️ Horas de 4 del mes: <b>${totalH4}</b> × 4 = <b>${totalH4 * 4} horas</b></span>
     </div>
