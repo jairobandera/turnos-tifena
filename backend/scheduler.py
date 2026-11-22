@@ -18,8 +18,8 @@ HISTORY_DAYS = 31          # se mira el mes anterior completo (rueda de noches, 
 W_UNFILLED = 10000
 W_H4_EXCESS = 20000       # el máximo de horas de 4 de la configuración se respeta sí o sí
 W_CAJERO_RULE = 400       # sólo si no se pudo cumplir estricto
-W_LIBRES_FALTAN = 3000    # cada libre de menos (los 6 libres van antes que la rueda de noches)
-W_SEGUIDOS = 2000         # máximo de días seguidos de la configuración
+W_LIBRES_FALTAN = 12000   # cada libre de menos (los 6 libres van antes que la rueda de noches)
+W_SEGUIDOS = 6000         # máximo de días seguidos (si alguien tiene libres de más, antes cubre el hueco)
 W_SEMANA_SIN_LIBRE = 80
 W_H4 = 60
 W_WRONG_ORDER = 40
@@ -141,7 +141,78 @@ def generate(year, month, employees, assignments, licenses, settings, desde=None
     kept = [a for a in assignments if a["date"] in month_days and a["date"] not in free_set]
     result["assignments"] = kept + result["assignments"]
     result["generated_days"] = free
+    if result.get("holes"):
+        hist = [a for a in assignments if a["date"] < iso(first)]
+        _repair_holes(result, year, month, hist, emps, licenses, settings, closures, extras or {}, free_set)
     return result
+
+
+def _repair_holes(result, year, month, hist, emps, licenses, settings, closures, extras, free_set):
+    """Repaso final: si quedó un puesto sin cubrir y hay alguien con libres de más que puede hacerlo,
+    se lo pone (directo, o con un enroque: un suplente pasa al puesto vacío y el de libres de más ocupa su lugar).
+    Nunca pasa el máximo de horas de 4 ni deja turnos pegados."""
+    from rules import analyze, rest_events, employee_timeline, staffing_for as need_for
+    max_h4 = int(settings.get("max_horas4", 2))
+    lic = license_days(licenses)
+    special = special_hours(*month_bounds(year, month), closures)
+    by_id = {e["id"]: e for e in emps}
+    A = result["assignments"]
+
+    def can(e, d, s, p):
+        return (e["positions"].get(p) in ("principal", "suplente") and s in (e.get("shifts") or SH)
+                and d not in lic.get(e["id"], ()) and special.get(d, {}).get(s, "") is not None
+                and not e.get("jornalero") and not e.get("fuera"))
+
+    def rest_ok(eid, extra):
+        tl = employee_timeline(hist + A + [extra], closures).get(eid, [])
+        ev = rest_events(tl)
+        if any(k == "pegado" for k, *_ in ev):
+            return False
+        first, last = month_bounds(year, month)
+        return sum(1 for k, d, *_ in ev if k == "hora4" and iso(first) <= d <= iso(last)) <= max_h4
+
+    still = []
+    for d, s, p, n in result["holes"]:
+        for _ in range(n):
+            if d not in free_set:
+                still.append((d, s, p))
+                continue
+            rep = analyze(year, month, hist + A, emps, licenses, settings, closures, extras)["report"]
+            spare = [r["employee_id"] for r in sorted(rep, key=lambda r: r["libres_objetivo"] - r["libres"])
+                     if not r["jornalero"] and r["libres"] > r["libres_objetivo"]]
+            busy = {a["employee_id"] for a in A if a["date"] == d}
+            done = False
+            # 1) directo: alguien con libres de más que sabe hacer ese puesto
+            for eid in spare:
+                e = by_id.get(eid)
+                new = {"date": d, "shift": s, "position": p, "employee_id": eid, "ord": 9, "locked": False, "note": ""}
+                if e and eid not in busy and can(e, d, s, p) and rest_ok(eid, new):
+                    A.append(new)
+                    done = True
+                    break
+            # 2) enroque: X (que está en ese turno y sabe hacer p) pasa a p; Y (libres de más) ocupa el lugar de X
+            if not done:
+                for a in [a for a in A if a["date"] == d and a["shift"] == s and a["position"] not in (p, "otro")]:
+                    x = by_id.get(a["employee_id"])
+                    if not x or not can(x, d, s, p) or a.get("locked"):
+                        continue
+                    q = a["position"]
+                    for eid in spare:
+                        y = by_id.get(eid)
+                        new = {"date": d, "shift": s, "position": q, "employee_id": eid, "ord": 9, "locked": False, "note": ""}
+                        if y and eid not in busy and can(y, d, s, q) and rest_ok(eid, new):
+                            a["position"] = p
+                            A.append(new)
+                            done = True
+                            break
+                    if done:
+                        break
+            if not done:
+                still.append((d, s, p))
+    need_ok = lambda d, s, p: need_for(settings["staffing"], extras, d, s).get(p, 0)
+    result["faltantes"] = [f"{fmt_day(d)} {SHIFT_NAME[s]}: falta {POS_NAME[p]} x1" for d, s, p in still
+                           if sum(1 for a in A if a["date"] == d and a["shift"] == s and a["position"] == p) < need_ok(d, s, p)]
+    result["holes"] = still
 
 
 def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h4,
@@ -415,6 +486,10 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
             open_days = len([t for t in month_idx if days[t] not in closed_d])
             goal = int(jornal_dias * len(avail) / open_days + 0.5) if open_days else jornal_dias
             worked = sum(1 - off[ei, t] for t in avail)
+            # lo configurado es un TOPE: nunca más jornales de los puestos (si falta gente, queda "Falta" a la vista)
+            fixed_worked = sum(1 for t in avail if days[t] not in free_set
+                               and any(a["employee_id"] == eid for a in by_day.get(days[t], [])))
+            m.Add(worked <= max(goal, fixed_worked))
             dev = m.NewIntVar(0, 62, "")
             m.Add(dev >= worked - goal)
             m.Add(dev >= goal - worked)
@@ -502,6 +577,7 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
         "ok": True,
         "assignments": out,
         "faltantes": faltantes,
+        "holes": [(d, s, p, solver.Value(u)) for d, s, p, u in unfilled if solver.Value(u)],
         "optimo": status == cp_model.OPTIMAL,
         "libres_cortos": any(solver.Value(u) > 0 for u in shortfalls),
         "costo": solver.ObjectiveValue(),
