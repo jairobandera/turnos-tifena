@@ -878,7 +878,9 @@ function renderReport() {
   const head = weeks.map((w) => `<th class="num">${D.dm(D.parse(w.start))}–${D.dm(D.parse(w.end))}<br><small>Libres · H4</small></th>`).join("");
   const rows = rep.map((r) => `<tr>
       <td class="sticky"><b>${UI.esc(r.name)}</b></td>
-      <td class="num">${r.jornalero ? `<span class="muted">Jornalero · ${r.trabajados} días${r.jornal_dias ? ` (objetivo ${r.jornal_dias})` : ""}</span>` : `<span class="${clsLib(r)}">${r.libres}</span> / ${r.libres_objetivo}`}</td>
+      <td class="num">${r.jornalero ? (r.jornal_dias
+          ? `<span class="${r.trabajados === r.jornal_dias ? "good" : "meh"}">${r.trabajados}</span> / ${r.jornal_dias} <small class="muted">jornales</small>`
+          : `${r.trabajados} <small class="muted">jornales</small>`) : `<span class="${clsLib(r)}">${r.libres}</span> / ${r.libres_objetivo}`}</td>
       <td class="num"><span class="${clsH4(r.horas4, r.max_horas4)}">${r.horas4}</span> / ${r.max_horas4}${r.horas4 ? ` <small class="muted">(${r.horas4 * 4} hs)</small>` : ""}</td>
       <td class="num">${r.licencia || ""}</td>
       <td class="num">${r.turnos.T1}</td><td class="num">${r.turnos.T2}</td><td class="num">${r.turnos.T3}</td>
