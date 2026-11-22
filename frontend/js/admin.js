@@ -813,18 +813,22 @@ function generateDialog() {
 
 // ============ exportar / compartir ============
 
-function exportDialog() {
-  const weeks = D.weeksOfMonth(A.year, A.month);
-  const cur = A.week === "all" ? 0 : A.week;
-  const [first, last] = D.monthBounds(A.year, A.month);
+async function exportDialog() {
+  // por defecto, el mes de la fecha actual; se puede elegir cualquier mes (los 12) de cualquier año con turnos
+  const hoy = new Date();
+  let years = [hoy.getFullYear()];
+  try { years = await API.get("/api/admin/export-years"); } catch (_) { /* queda el año actual */ }
   const html = `<h3>Exportar turnos</h3>
-    <div class="sub">Sale igual que la planilla: Turno 3, Turno 1, Turno 2 y Libres. El reporte no se incluye.</div>
+    <div class="sub">Sale igual que la planilla: Turno 3, Turno 1, Turno 2 y Libres. El mes sale del día 1 al último, sin días de otros meses. El reporte no se incluye.</div>
     <form id="exp-form" class="opts">
+      <div style="display:flex;gap:8px">
+        <label class="field" style="flex:1">Año
+          <select name="year">${years.map((y) => `<option ${y === hoy.getFullYear() ? "selected" : ""}>${y}</option>`).join("")}</select></label>
+        <label class="field" style="flex:2">Mes
+          <select name="month">${D.MONTHS.map((n, i) => `<option value="${i + 1}" ${i === hoy.getMonth() ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+      </div>
       <label class="field">¿Qué querés exportar?
-        <select name="range">
-          ${weeks.map((w, i) => `<option value="${D.iso(w.start)}|${D.iso(w.end)}" ${i === cur ? "selected" : ""}>Semana ${D.dm(w.start)} al ${D.dm(w.end)}</option>`).join("")}
-          <option value="${D.iso(first)}|${D.iso(last)}">Mes completo (${D.MONTHS[A.month - 1]})</option>
-        </select></label>
+        <select name="range"></select></label>
       <label class="field">Formato
         <select name="fmt"><option value="pdf">PDF</option><option value="excel">Excel</option></select></label>
       <div class="actions">
@@ -834,7 +838,19 @@ function exportDialog() {
       </div>
     </form>`;
   const s = UI.sheet(html);
-  $("#exp-form", s.el).onsubmit = async (e) => {
+  const form = $("#exp-form", s.el);
+  const fillRange = () => {
+    const y = Number(form.elements.year.value);
+    const mo = Number(form.elements.month.value);
+    const [first, last] = D.monthBounds(y, mo);
+    const weeks = D.weeksOfMonth(y, mo);
+    form.elements.range.innerHTML = `<option value="${D.iso(first)}|${D.iso(last)}" selected>Mes completo (${D.MONTHS[mo - 1]} ${y}, del 01 al ${D.dm(last)})</option>`
+      + weeks.map((w) => `<option value="${D.iso(w.start)}|${D.iso(w.end)}">Semana ${D.dm(w.start)} al ${D.dm(w.end)}</option>`).join("");
+  };
+  form.elements.year.onchange = fillRange;
+  form.elements.month.onchange = fillRange;
+  fillRange();
+  form.onsubmit = async (e) => {
     e.preventDefault();
     const act = e.submitter ? e.submitter.value : "download";
     const f = new FormData(e.target);

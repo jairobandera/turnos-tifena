@@ -591,6 +591,17 @@ def admin_password():
 
 # ---------------- exportación ----------------
 
+@app.get("/api/admin/export-years")
+@admin_required
+def admin_export_years():
+    """Años con turnos cargados (para el selector de exportar), siempre incluye el actual."""
+    r = conn().execute("SELECT MIN(date) AS a, MAX(date) AS b FROM assignments").fetchone()
+    hoy = date.today().year
+    lo = int(r["a"][:4]) if r["a"] else hoy
+    hi = max(int(r["b"][:4]) if r["b"] else hoy, hoy)
+    return jsonify(list(range(lo, hi + 1)))
+
+
 @app.get("/api/admin/export/<fmt>")
 @admin_required
 def admin_export(fmt):
@@ -602,10 +613,11 @@ def admin_export(fmt):
     wk_start = s - timedelta(days=s.weekday())
     wk_end = e + timedelta(days=6 - e.weekday())
     assigns = db.get_assignments(c, wk_start, wk_end)
+    es_mes = s.day == 1 and e == db.month_bounds(s.year, s.month)[1]
     weeks = build_weeks(s, e, assigns, db.get_employees(c), db.get_licenses(c), db.get_settings(c)["staffing"],
                         closures(c, wk_start - timedelta(days=1), wk_end + timedelta(days=1)),
-                        extras_for(c, wk_start, wk_end))
-    if s.day == 1 and e == db.month_bounds(s.year, s.month)[1]:
+                        extras_for(c, wk_start, wk_end), solo_rango=es_mes)
+    if es_mes:
         name = f"Turnos {MONTHS[s.month - 1].capitalize()} {s.year}"
     else:
         name = f"Turnos {s.day:02d}-{s.month:02d} al {e.day:02d}-{e.month:02d}"
