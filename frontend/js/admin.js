@@ -1137,7 +1137,7 @@ async function renderConfig() {
   renderSpecialDays();
   const s = A.settings;
   const f = $("#cfg-form");
-  for (const k of ["max_horas4", "libres_objetivo", "bloque", "max_dias_seguidos", "tiempo_generador"]) f.elements[k].value = s[k];
+  for (const k of ["max_horas4", "libres_objetivo", "max_libres_trabajados", "bloque", "max_dias_seguidos", "tiempo_generador"]) f.elements[k].value = s[k];
   f.elements.cajeros_estrictos.checked = !!s.cajeros_estrictos;
   f.elements.encargado_fuera.checked = !!s.encargado_fuera;
   $("#staffing").innerHTML = `<table class="grid"><thead><tr><th>Puesto</th>${SHIFTS.map((x) => `<th class="num">${x.name}</th>`).join("")}</tr></thead><tbody>
@@ -1157,7 +1157,7 @@ async function renderConfig() {
   f.onsubmit = async (e) => {
     e.preventDefault();
     const body = {};
-    for (const k of ["max_horas4", "libres_objetivo", "bloque", "max_dias_seguidos", "tiempo_generador"]) body[k] = Number(f.elements[k].value);
+    for (const k of ["max_horas4", "libres_objetivo", "max_libres_trabajados", "bloque", "max_dias_seguidos", "tiempo_generador"]) body[k] = Number(f.elements[k].value);
     body.cajeros_estrictos = f.elements.cajeros_estrictos.checked;
     const wasOut = !!A.settings.encargado_fuera;
     body.encargado_fuera = f.elements.encargado_fuera.checked;

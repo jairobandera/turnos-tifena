@@ -583,7 +583,11 @@ def analyze(year, month, assignments, employees, licenses, settings, closures=()
             # sin refuerzos, si sobra gente alguien termina con libres de más: es aviso, no error
             issue("warn", f"{emp['name']}: {len(libres)} libres, más de los {target} que le corresponden (sobra gente)", employee_id=eid)
         elif len(filled_days) == n_days - len(closed) and emp["active"] and len(libres) < target:
-            issue("warn", f"{emp['name']}: {len(libres)} libres en el mes (le corresponden {target})", employee_id=eid)
+            trabajados = target - len(libres)
+            max_lt = int(settings.get("max_libres_trabajados", 1))
+            issue("warn" if trabajados <= max_lt else "error",
+                  f"{emp['name']}: trabajó {trabajados} día(s) libre(s) (le corresponden {target} libres; máximo permitido {max_lt})",
+                  employee_id=eid)
 
         week_rows = []
         for ws, we in weeks:

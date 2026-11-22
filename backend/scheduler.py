@@ -18,7 +18,9 @@ HISTORY_DAYS = 31          # se mira el mes anterior completo (rueda de noches, 
 W_UNFILLED = 10000
 W_H4_EXCESS = 20000       # el máximo de horas de 4 de la configuración se respeta sí o sí
 W_CAJERO_RULE = 400       # sólo si no se pudo cumplir estricto
-W_LIBRES_FALTAN = 12000   # cada libre de menos (los 6 libres van antes que la rueda de noches)
+W_LIBRES_FALTAN = 50000   # pasar el máximo de días libres trabajados: prácticamente nunca
+W_LIBRE_TRABAJADO = 4000  # trabajar un día libre (dentro del máximo de la configuración): antes que dejar un hueco
+W_JORNAL_FALTA = 100000   # cada jornal de menos del jornalero (sus jornales se respetan)
 W_SEGUIDOS = 6000         # máximo de días seguidos (si alguien tiene libres de más, antes cubre el hueco)
 W_SEMANA_SIN_LIBRE = 80
 W_H4 = 60
@@ -112,6 +114,7 @@ def generate(year, month, employees, assignments, licenses, settings, desde=None
     max_h4 = int(settings.get("max_horas4", 2))
     target_libres = int(settings.get("libres_objetivo", 6))
     max_seg = int(settings.get("max_dias_seguidos", 6))
+    max_lib_trab = int(settings.get("max_libres_trabajados", 1))
     time_limit = float(time_limit or settings.get("tiempo_generador", 25))
 
     # cierres de la estación: turnos cerrados no llevan gente; días cerrados no cuentan como libres
@@ -133,17 +136,17 @@ def generate(year, month, employees, assignments, licenses, settings, desde=None
         if cajeros:
             only_caj = {s: {"cajero": need["cajero"]} for s, need in staffing.items() if need.get("cajero")}
             locked_caj = [a for a in locked if a["employee_id"] in {e["id"] for e in cajeros}]
-            r1 = _solve(strict, cajeros, only_caj, locked_caj, *common, time_limit * 0.3, night_bonus=True, prefer=prefer,
+            r1 = _solve(strict, cajeros, only_caj, locked_caj, *common, time_limit * 0.3, night_bonus=True, prefer=prefer, max_lib_trab=max_lib_trab,
                         extras={})
             if r1["ok"]:
                 forced += [a for a in r1["assignments"] if not a.get("locked")]
-        result = _solve(strict, emps, staffing, forced, *common, time_limit * 0.7, prefer=prefer, extras=extras,
+        result = _solve(strict, emps, staffing, forced, *common, time_limit * 0.7, prefer=prefer, extras=extras, max_lib_trab=max_lib_trab,
                         force_off=force_off)
         if result["ok"] and cajeros and (result["faltantes"] or result.get("libres_cortos")):
             # quedó un hueco (o alguien sin sus libres) por haber fijado antes a los cajeros:
             # probar todo junto, arrancando desde la solución que ya hay, y quedarse con lo mejor
             hints = {(a["employee_id"], a["date"], a["shift"], a["position"]) for a in result["assignments"]}
-            alt = _solve(strict, emps, staffing, list(locked), *common, time_limit, prefer=prefer, extras=extras,
+            alt = _solve(strict, emps, staffing, list(locked), *common, time_limit, prefer=prefer, extras=extras, max_lib_trab=max_lib_trab,
                          hints=hints, force_off=force_off)
             # antes que dejar a alguien sin sus libres, preferimos dejar el hueco a la vista (el encargado decide)
             key = lambda r: (bool(r.get("libres_cortos")), len(r["faltantes"]), r["costo"])
@@ -419,7 +422,7 @@ def _repair_holes(result, year, month, hist, emps, licenses, settings, closures,
 
 def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h4,
            target_libres, max_seg, month_days, closed_shift, closed_d, time_limit, night_bonus=False,
-           prefer=frozenset(), extras=None, hints=None, force_off=None):
+           prefer=frozenset(), extras=None, hints=None, force_off=None, max_lib_trab=1):
     m = cp_model.CpModel()
     pen = []
     shortfalls = []
@@ -698,20 +701,23 @@ def _solve(strict, emps, staffing, locked, days, free_set, by_day, lic, B, max_h
             fixed_worked = sum(1 for t in avail if days[t] not in free_set
                                and any(a["employee_id"] == eid for a in by_day.get(days[t], [])))
             m.Add(worked <= max(goal, fixed_worked))
+            # y trabaja los jornales que tiene puestos (es la titular del spot de la tarde): no se le recortan
             dev = m.NewIntVar(0, 62, "")
-            m.Add(dev >= worked - goal)
             m.Add(dev >= goal - worked)
-            pen.append((W_JORNAL_DESVIO, dev))
+            pen.append((W_JORNAL_FALTA, dev))
         if jornalero:
             avail = []   # el jornalero no tiene mínimo ni tope de libres
         if not jornalero:
-            # si alguien tiene que perder libres, que sea parejo: cada libre de menos cuesta más que el anterior
-            for step in range(0, 6):
-                under = m.NewIntVar(0, 62, "")
-                m.Add(under >= target - step - off_sum)
-                pen.append((W_LIBRES_FALTAN, under))
-                if step == 1:
-                    shortfalls.append(under)   # le faltan 2 libres o más
+            # Días libres trabajados: si hace falta, alguien puede trabajar un libre suyo,
+            # hasta el máximo de la configuración (y repartido: primero uno a cada uno).
+            falta = m.NewIntVar(0, 62, "")
+            m.Add(falta >= target - off_sum)
+            permitido = m.NewIntVar(0, max(0, max_lib_trab), "")
+            exceso = m.NewIntVar(0, 62, "")
+            m.Add(permitido + exceso >= falta)
+            pen.append((W_LIBRE_TRABAJADO, permitido))
+            pen.append((W_LIBRES_FALTAN, exceso))
+            shortfalls.append(exceso)
             # libres de más (sólo si sobra gente): parejos, el segundo de más cuesta más que el primero
             for step in range(0, 4):
                 over = m.NewIntVar(0, 62, "")

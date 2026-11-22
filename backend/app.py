@@ -520,7 +520,7 @@ def admin_settings():
     c = conn()
     data = request.get_json(force=True)
     clean = {}
-    for k in ("max_horas4", "libres_objetivo", "bloque", "max_dias_seguidos", "tiempo_generador"):
+    for k in ("max_horas4", "libres_objetivo", "max_libres_trabajados", "bloque", "max_dias_seguidos", "tiempo_generador"):
         if k in data:
             clean[k] = max(0, int(data[k]))
     if "cajeros_estrictos" in data:

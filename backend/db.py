@@ -15,6 +15,7 @@ ASSIGNABLE = POSITIONS + [TASK]
 DEFAULT_SETTINGS = {
     "max_horas4": 2,
     "libres_objetivo": 6,
+    "max_libres_trabajados": 1,   # si hace falta, cuántos de sus libres puede trabajar alguien en el mes
     "bloque": 4,
     "cajeros_estrictos": True,
     "max_dias_seguidos": 6,
