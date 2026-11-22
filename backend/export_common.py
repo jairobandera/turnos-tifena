@@ -24,6 +24,14 @@ def build_weeks(start, end, assignments, employees, licenses, staffing, closures
     s, e = iso(parse_date(start)), iso(parse_date(end))
     with_data = {a["date"] for a in assignments}
     weeks = []
+    if solo_rango:
+        # mes entero: hojas de 7 días seguidos desde el día 1 (así ninguna hoja queda con un solo día)
+        todos = list(date_range(start, end))
+        for i in range(0, len(todos), 7):
+            dias = todos[i:i + 7]
+            days = [day_layout(iso(d), assignments, employees, lic, staffing, closures, extras) for d in dias]
+            weeks.append({"start": dias[0], "end": dias[-1], "label": f"{fmt_day(dias[0])} al {fmt_day(dias[-1])}", "days": days})
+        return weeks
     for mon, sun in week_ranges(start, end):
         # semana completa lun-dom; los días fuera del rango sólo si ya están armados (y no es un mes)
         dias = [d for d in date_range(mon, sun) if s <= iso(d) <= e or (not solo_rango and iso(d) in with_data)]
